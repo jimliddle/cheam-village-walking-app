@@ -168,7 +168,7 @@ a{color:#fff}
     <p id="eInfo"></p>
     <div class="row"><label for="eWall">Wall finish</label><select id="eWall"></select></div>
     <div class="row"><label for="eWallC">Wall colour</label><div class="cpair"><input type="color" id="eWallC"><label><input type="checkbox" id="eWallCu"> use this colour</label></div></div>
-    <div class="row"><label for="eRoof">Roof</label><select id="eRoof"><option value="">As modelled</option><option value="tile">Clay tiles</option><option value="old">Old clay tiles, mossy</option><option value="concrete">Concrete tiles</option><option value="slate">Slate</option><option value="flat">Flat</option></select></div>
+    <div class="row"><label for="eRoof">Roof</label><select id="eRoof"><option value="">As modelled</option><option value="tile">Orange-red tiles</option><option value="brown">Brown tiles</option><option value="old">Old clay tiles, mossy</option><option value="concrete">Concrete tiles</option><option value="slate">Slate</option><option value="flat">Flat</option></select></div>
     <div class="row"><label for="eRoofC">Roof colour</label><div class="cpair"><input type="color" id="eRoofC"><label><input type="checkbox" id="eRoofCu"> use this colour</label></div></div>
     <div id="eSigns"></div>
     <div class="go" style="padding:6px 0 0"><button class="btn primary" id="eSaveR">Save and rebuild</button><button class="btn" id="eSave">Save</button><button class="btn" id="eReset">Reset this building</button><button class="btn" id="eCancel">Cancel</button></div>
@@ -530,9 +530,9 @@ async function cachedGrid(name, fetcher) {
 /* =========================================================================
    OpenStreetMap parsing
    ========================================================================= */
-const skipBuilding = t => t.building === 'roof' || t.building === 'no' || t.location === 'underground' || +t.layer < 0 || t.building === 'construction' && !t.height;
+const skipBuilding = t => t.building === 'no' || t.location === 'underground' || +t.layer < 0 || t.building === 'construction' && !t.height;
 function parseOSM(json) {
-  const W = { buildings: [], roads: [], areas: [], barriers: [], trees: [], points: [] };
+  const W = { buildings: [], roads: [], areas: [], barriers: [], trees: [], points: [], canopies: [] };
   const conv = g => ll2xz(g.lon, g.lat);
   for (const el of json.elements) {
     const t = el.tags || {};
@@ -542,10 +542,11 @@ function parseOSM(json) {
       const pts = el.geometry.filter(Boolean).map(conv);
       const closed = el.nodes && el.nodes.length > 3 && el.nodes[0] === el.nodes[el.nodes.length - 1];
       const ring = () => { const r = pts.slice(); if (near(r[0], r[r.length - 1])) r.pop(); return r; };
+      if (t.building === 'roof' && closed) { W.canopies.push({ id: el.id, outer: ring(), tags: t }); continue; }
       if (t.building && closed) { if (!skipBuilding(t)) W.buildings.push({ id: el.id, outer: ring(), holes: [], tags: t }); continue; }
       if (t.highway && !(closed && t.area === 'yes')) { W.roads.push({ id: el.id, pts, nodes: el.nodes, tags: t }); continue; }
       if (t.barrier) W.barriers.push({ pts, tags: t });
-      if (closed && (t.landuse || t.leisure || t.natural || t.amenity || t.highway || t.waterway === 'riverbank')) W.areas.push({ id: el.id, outer: ring(), holes: [], tags: t });
+      if (closed && (t.landuse || t.leisure || t.natural || t.amenity || t.highway || t.waterway === 'riverbank' || t.railway === 'platform' || t.public_transport === 'platform')) W.areas.push({ id: el.id, outer: ring(), holes: [], tags: t });
       else if (t.railway || t.waterway) W.roads.push({ id: el.id, pts, nodes: el.nodes || [], tags: t });
     } else if (el.type === 'relation' && el.members) {
       const outs = [], ins = [];
@@ -565,6 +566,7 @@ function shiftWorld(W, dx, dz) {
   for (const b of W.barriers) b.pts.forEach(sp);
   for (const t of W.trees) { t.x += dx; t.z += dz; }
   for (const p of W.points) { p.x += dx; p.z += dz; }
+  for (const c of W.canopies) c.outer.forEach(sp);
 }
 /* Align OSM footprints to the LiDAR by maximising overlap with the above-ground mask */
 function registerToLidar(W, dtm, dsm) {
@@ -705,6 +707,22 @@ else if (st == 3) {
 else if (st == 4) { col = stone(uv, vCol, sH); sRough = 0.92; }
 else if (st == 5) { if (uv.y < floorH + 0.12) col = brick(uv, vec3(0.45,0.21,0.14), seed, sH); else { col = renderW(uv, vCol, 2.2, sH); sRough = 0.96; } }
 else if (st == 7) { float b = uv.x/0.15; float f = fract(b); float fw = fwidth(b); col = vCol*(0.8+0.3*h21(vec2(floor(b), seed)))*(0.85+0.2*smoothstep(0.0,0.12+fw,f))*(0.9+0.15*vnoise(vec2(b*0.3, uv.y*20.0))); sH += smoothstep(0.0,0.12+fw,f)*0.006; sRough = 0.9; }
+else if (st == 9) {
+  col = brick(uv, vCol, seed, sH); sRough = 0.86;
+  float bayW = 3.0, bxx = fract(uv.x/bayW)*bayW, up0 = 3.35, up1 = max(up0 + 1.0, vEave - 0.55);
+  float gw = boxAA(vec2(bxx, uv.y), vec2(0.3, 0.6), vec2(bayW - 0.3, 2.35));
+  float band = boxAA(vec2(0.0, uv.y), vec2(-1.0, 2.45), vec2(1.0, 3.25));
+  float rib = boxAA(vec2(0.0, uv.y), vec2(-1.0, up0), vec2(1.0, up1));
+  float md = abs(fract(uv.x/1.5 + 0.5) - 0.5)*1.5; float mull = 1.0 - smoothstep(0.035, 0.035 + fwidth(uv.x)*1.5, md);
+  float fasc = smoothstep(up1 - 0.01, up1 + 0.01, uv.y);
+  col = mix(col, vec3(0.74,0.84,0.87), band); col = mix(col, vec3(0.9,0.9,0.88), fasc);
+  float gl = max(gw*(1.0 - band), rib*(1.0 - mull));
+  vec2 ic = floor(vec2(uv.x/0.3, uv.y/0.35)); float ih = h21(ic + seed);
+  vec3 inside = mix(vec3(0.045,0.05,0.055), mix(vec3(0.08,0.22,0.16), vec3(0.1,0.15,0.26), step(0.5, ih)), step(0.82, ih)*0.6*step(fract(uv.y/1.2), 0.75));
+  col = mix(col, inside, gl); col = mix(col, vec3(0.13,0.14,0.15), rib*mull);
+  sRough = mix(sRough, 0.06, gl); sMetal = mix(sMetal, 0.45, gl); sH *= 1.0 - max(gl, max(band, fasc));
+  sEmis += gl*vec3(0.95,0.97,1.0)*(0.02 + 0.9*uNight)*step(0.35, ih);
+}
 else if (st == 8) { float n = fbm(vWP.xz*3.0 + vWP.y*2.0); float n2 = vnoise(vec2(uv.x, uv.y)*14.0); col = vCol*(0.55+0.7*n)*(0.8+0.3*n2); sH += (n*0.08+n2*0.03); sRough = 1.0; }
 if (st <= 5) {
   col *= mix(0.72, 1.0, smoothstep(0.0, 0.8, uv.y));
@@ -809,7 +827,9 @@ function makeRoofMaterial() {
     fMap: /* glsl */`
 vec2 uv = vUvM; int t = int(vInfo.x + 0.5); float seed = vInfo.y;
 float sH = 0.0, sRough = 0.8, sMetal = 0.0; vec3 sEmis = vec3(0.0); vec3 col = vCol;
-if (t == 2) { float n = vnoise(uv*25.0), n2 = fbm(uv*0.8); col = vCol*(0.8+0.25*n)*(0.85+0.3*n2); sH = n*0.004; sRough = 0.95; }
+if (t == 2) { float n = vnoise(uv*25.0), n2 = fbm(uv*0.8); col = vCol*(0.8+0.25*n)*(0.85+0.3*n2); sH = n*0.004; sRough = 0.95;
+  if (vInfo.z > 0.5) { vec2 pp = uv/vec2(1.05, 1.75); vec2 pf = fract(pp); float pan = step(0.05, pf.x)*step(pf.x, 0.95)*step(0.04, pf.y)*step(pf.y, 0.96)*step(0.42, fbm(floor(pp)*0.12 + seed*9.0)); col = mix(col, vec3(0.02,0.035,0.07)*(0.8+0.4*h21(floor(pp))), pan); sRough = mix(sRough, 0.15, pan); sMetal = mix(sMetal, 0.5, pan); sH *= 1.0 - pan; } }
+else if (t == 4) { vec2 bp = uv/vec2(0.55, 0.32); float row = floor(bp.y); bp.x += mod(row, 2.0)*0.5; vec2 cell = floor(bp), f = fract(bp), fw = fwidth(bp); float mo = 1.0 - smoothstep(0.03, 0.06+fw.x, f.x)*smoothstep(0.05, 0.09+fw.y, f.y); col = vCol*(0.82+0.3*h21(cell))*(0.88+0.18*fbm(vWP.xz*0.8 + vWP.y*0.5)); col = mix(col, col*0.75, mo); col = mix(col, vec3(0.32,0.34,0.26), smoothstep(0.6, 0.8, fbm(vWP.xz*1.5 + vWP.y))*0.3); sH = (1.0-mo)*0.01; sRough = 0.9; }
 else {
   vec2 sz = t == 1 ? vec2(0.3, 0.2) : vec2(0.165, 0.1);
   vec2 tp = uv/sz; float row = floor(tp.y); tp.x += mod(row,2.0)*0.5; vec2 cell = floor(tp); vec2 f = fract(tp); vec2 fw = fwidth(tp);
@@ -922,7 +942,7 @@ const roofQuad = (G, A, B, C, D, info, col) => { roofTri(G, A, B, C, info, col);
 const C = (r, g, b) => [r, g, b];
 const FINISH = { redBrick: [0, [0.5, 0.24, 0.15]], stockBrick: [0, [0.62, 0.52, 0.37]], darkBrick: [0, [0.36, 0.18, 0.11]], modernBrick: [0, [0.6, 0.31, 0.19]], render: [1, [0.9, 0.89, 0.86]], pebbledash: [5, [0.84, 0.81, 0.72]], weather: [2, [0.9, 0.89, 0.85]], tudor: [3, [0.88, 0.86, 0.8]], stone: [4, [0.55, 0.52, 0.47]] };
 const FINISH_LABEL = { redBrick: 'Red brick', stockBrick: 'Yellow stock brick', darkBrick: 'Old dark brick', modernBrick: 'Modern orange brick', render: 'Painted render', pebbledash: 'Brick below, pebbledash above', weather: 'White weatherboarding', tudor: 'Mock-Tudor timbering', stone: 'Stone or flint' };
-const ROOFS = { tile: [0, [0.45, 0.21, 0.13]], old: [3, [0.4, 0.22, 0.14]], slate: [1, [0.2, 0.21, 0.24]], flat: [2, [0.16, 0.16, 0.17]], concrete: [0, [0.33, 0.25, 0.21]] };
+const ROOFS = { tile: [0, [0.52, 0.17, 0.09]], brown: [0, [0.28, 0.14, 0.09]], old: [3, [0.4, 0.2, 0.12]], slate: [1, [0.2, 0.21, 0.24]], flat: [2, [0.16, 0.16, 0.17]], concrete: [0, [0.36, 0.2, 0.14]] };
 const hexLin = h => { const c = new THREE.Color(h); return [c.r, c.g, c.b]; };
 const linHex = c => '#' + new THREE.Color(c[0], c[1], c[2]).getHexString();
 function tagColour(v) { if (!v) return null; const s = String(v).trim().toLowerCase().replace(/[_ ]/g, ''); if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/.test(s) && THREE.Color.NAMES[s] === undefined) return null; return hexLin(s); }
@@ -941,16 +961,18 @@ function buildingStyle(b, ctx, rnd) {
     if (y < 1945) return x < 0.45 ? FINISH.pebbledash : x < 0.75 ? FINISH.redBrick : x < 0.88 ? FINISH.render : FINISH.tudor;
     if (y < 1980) return x < 0.6 ? FINISH.modernBrick : FINISH.stockBrick;
     return x < 0.75 ? FINISH.modernBrick : FINISH.render; };
-  const eraRoof = y => { const x = rnd(); if (y == null) return x < 0.72 ? ROOFS.tile : ROOFS.slate; if (y < 1837) return ROOFS.old; if (y < 1919) return x < 0.75 ? ROOFS.slate : ROOFS.tile; if (y < 1945) return ROOFS.tile; if (y < 1980) return ROOFS.concrete; return ROOFS.tile; };
-  if (ctx.weatherIds.has(b.id) || /whitehall|old farmhouse|farm house|cottage/i.test(nm)) { f = FINISH.weather; rf = ROOFS.old; kind = 'historic'; fixed = true; }
+  const eraRoof = y => { const x = rnd(); if (y == null) return x < 0.6 ? ROOFS.tile : x < 0.85 ? ROOFS.brown : ROOFS.slate; if (y < 1837) return ROOFS.old; if (y < 1919) return x < 0.6 ? ROOFS.slate : ROOFS.tile; if (y < 1945) return x < 0.7 ? ROOFS.tile : ROOFS.brown; if (y < 1980) return x < 0.6 ? ROOFS.concrete : ROOFS.brown; return ROOFS.tile; };
+  if (b.hero === 'library1962') { f = [9, [0.56, 0.38, 0.24]]; rf = [1, [0.42, 0.43, 0.43]]; kind = 'big'; fixed = true; }
+  else if (ctx.weatherIds.has(b.id) || /whitehall|old farmhouse|farm house|cottage/i.test(nm)) { f = FINISH.weather; rf = ROOFS.old; kind = 'historic'; fixed = true; }
   else if (/church|chapel|cathedral/.test(type) || T.amenity === 'place_of_worship' || /church|chapel/i.test(nm)) { kind = 'church'; const lum = /lumley/i.test(nm); f = lum ? [1, [0.66, 0.64, 0.6]] : FINISH.stone; rf = lum ? ROOFS.tile : ROOFS.slate; fixed = true; }
   else if (/garage|shed|carport/.test(type) || (A < 30 && !T['building:levels'] && !b.shop)) { kind = 'garage'; f = rnd() < 0.5 ? FINISH.redBrick : [1, [0.8, 0.79, 0.75]]; rf = ROOFS.flat; flags |= /garage/.test(type) ? 8 : 2; }
   else {
     f = eraWall(yr); rf = eraRoof(yr);
-    if (b.shop) { kind = 'shop'; const nearX = Math.hypot(b.c[0] - ctx.cross[0], b.c[1] - ctx.cross[1]) < 180; if (yr == null ? nearX : yr >= 1919 && yr < 1945 && nearX) f = FINISH.tudor; else if (f === FINISH.pebbledash) f = FINISH.redBrick; }
+    if (b.shop) { kind = 'shop'; const nearX = Math.hypot(b.c[0] - ctx.cross[0], b.c[1] - ctx.cross[1]) < 180; if (yr == null ? nearX : yr >= 1919 && yr < 1945 && nearX) f = FINISH.tudor; else if (f === FINISH.pebbledash) f = FINISH.redBrick; if (yr == null || yr >= 1900) rf = rnd() < 0.65 ? [0, [0.21, 0.12, 0.08]] : ROOFS.brown; }
     else if (A > 600 || /school|office|commercial|industrial|apartments|retail|hall|civic|public/.test(type)) kind = 'big';
     if (b.listed && !b.shop && (yr == null || yr < 1837)) { kind = 'historic'; f = /cottage|farm|barn|forge/i.test(b.listed.name) ? FINISH.weather : rnd() < 0.5 ? FINISH.darkBrick : FINISH.render; rf = ROOFS.old; }
   }
+  if (!fixed && b.pubEdges && !T['building:material'] && !o.mat) f = [1, [0.86, 0.82, 0.68]];
   if (!fixed) {
     const m = ((T['building:material'] || '') + ' ' + (o.mat || '')).toLowerCase();
     if (/timber_framing|timber framing/.test(m)) f = FINISH.tudor;
@@ -1043,13 +1065,25 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
       const y = flat && S.roof !== 2 ? top : top;
       const contour = outer.map(p => new THREE.Vector2(p[0], p[1])), holes = b.holes.map(h => h.map(p => new THREE.Vector2(p[0], p[1])));
       const tris = THREE.ShapeUtils.triangulateShape(contour, holes); const all = [...outer, ...b.holes.flat()];
-      for (const t of tris) roofTri(GR, [all[t[0]][0], y, all[t[0]][1]], [all[t[1]][0], y, all[t[1]][1]], [all[t[2]][0], y, all[t[2]][1]], [2, seed, 0, 0], C(0.17, 0.17, 0.18));
+      for (const t of tris) roofTri(GR, [all[t[0]][0], y, all[t[0]][1]], [all[t[1]][0], y, all[t[1]][1]], [all[t[2]][0], y, all[t[2]][1]], [2, seed, S.kind !== 'garage' && A > 150 && rnd() < 0.35 ? 1 : 0, 0], S.kind === 'garage' || A < 150 ? C(0.15, 0.15, 0.16) : C(0.46, 0.46, 0.44));
       if (A > 40) rings.forEach(ring => { for (let i = 0; i < ring.length; i++) { const a = ring[i], q = ring[(i + 1) % ring.length]; wallQuad(GW, a, q, top, top, top + 0.4, top + 0.4, base, [S.style, seed, null, 2], S.col, eave + 0.4); wallQuad(GW, q, a, top, top, top + 0.4, top + 0.4, base, [S.style, seed, null, 2], S.col, eave + 0.4); } });
     } else if (ob && rectFill > 0.86 && outer.length <= 10 && ob.hw > 1.2) {
       const gable = S.kind === 'historic' || S.kind === 'shop' || S.kind === 'church' || shape === 'gabled' || (shape !== 'hipped' && rnd() < (S.style === 5 ? 0.25 : 0.45));
       const hw = ob.hw, hl = ob.hl, o = 0.32, g = 0.22, slope = (ridge - eave) / hw;
       const ye = top - o * slope, yr = base + ridge;
       const P = (u, v, y) => { const q = OB(ob, u, v); return [q[0], y, q[1]]; };
+      const frontGables = () => {
+        if (S.kind !== 'shop' || 2 * hl < 10 || ridge - eave < 1.6) return;
+        const sgn = ctx.roadDist(...OB(ob, 0, hw + 4)) <= ctx.roadDist(...OB(ob, 0, -hw - 4)) ? 1 : -1, F = v => sgn * v;
+        const gh = Math.min(2.4, (ridge - eave) * 0.85), gw = 3.4, dv = gh / slope, n = Math.max(1, Math.floor((2 * hl - 2) / 6.5)), o2 = 0.25, s2 = gh / (gw / 2), gcol = S.style === 3 ? S.col : C(0.88, 0.86, 0.8);
+        for (let k = 0; k < n; k++) {
+          const uk = -hl + 1 + (k + 0.5) * (2 * hl - 2) / n;
+          wallTri(GW, P(uk - gw / 2, F(hw + 0.12), top), P(uk + gw / 2, F(hw + 0.12), top), P(uk, F(hw + 0.12), top + gh), [sgn * ob.V[0], 0, sgn * ob.V[1]], base, [3, seed, gw, 2], gcol, eave, OB(ob, uk - gw / 2, F(hw + 0.12)), [ob.U[0], ob.U[1]]);
+          const Rf = P(uk, F(hw + 0.4), top + gh + 0.05), Rb = P(uk, F(hw - dv), top + gh + 0.05);
+          roofQuad(GR, P(uk - gw / 2 - o2, F(hw + 0.4), top - o2 * s2), Rf, Rb, P(uk - gw / 2 - o2, F(hw - dv), top - o2 * s2), rinfo, S.roofCol);
+          roofQuad(GR, P(uk + gw / 2 + o2, F(hw + 0.4), top - o2 * s2), Rf, Rb, P(uk + gw / 2 + o2, F(hw - dv), top - o2 * s2), rinfo, S.roofCol);
+        }
+      };
       if (gable) {
         roofQuad(GR, P(-hl - g, hw + o, ye), P(hl + g, hw + o, ye), P(hl + g, 0, yr), P(-hl - g, 0, yr), rinfo, S.roofCol);
         roofQuad(GR, P(-hl - g, -hw - o, ye), P(hl + g, -hw - o, ye), P(hl + g, 0, yr), P(-hl - g, 0, yr), rinfo, S.roofCol);
@@ -1058,12 +1092,14 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
           wallTri(GW, P(s * hl, -hw, top), P(s * hl, hw, top), P(s * hl, 0, yr), [s * ob.U[0], 0, s * ob.U[1]], base, [S.style, seed, 2 * hw, 2], S.col, eave, org, t);
         }
         chimney = { u: (rnd() < 0.5 ? -1 : 1) * (hl - 0.5), yr };
+        frontGables(gable);
       } else {
         const rl = Math.max(0, hl - hw);
         roofQuad(GR, P(-hl - o, hw + o, ye), P(hl + o, hw + o, ye), P(rl, 0, yr), P(-rl, 0, yr), rinfo, S.roofCol);
         roofQuad(GR, P(-hl - o, -hw - o, ye), P(hl + o, -hw - o, ye), P(rl, 0, yr), P(-rl, 0, yr), rinfo, S.roofCol);
         roofTri(GR, P(hl + o, -hw - o, ye), P(hl + o, hw + o, ye), P(rl, 0, yr), rinfo, S.roofCol);
         roofTri(GR, P(-hl - o, -hw - o, ye), P(-hl - o, hw + o, ye), P(-rl, 0, yr), rinfo, S.roofCol);
+        frontGables(false);
         chimney = { u: rl > 0.8 ? (rnd() < 0.5 ? -1 : 1) * rl * 0.85 : 0, yr };
       }
       if (chimney && (S.kind === 'res' || S.kind === 'historic') && rnd() < 0.8) {
@@ -1085,9 +1121,11 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
       const ts = 2.6, th = ridge + (maxH - ridge) * 0.32, U = ob.U, V = ob.V;
       const cr = [[-ts, -ts], [ts, -ts], [ts, ts], [-ts, ts]].map(([u, v]) => [tp[0] + U[0] * u + V[0] * v, tp[1] + U[1] * u + V[1] * v]);
       const ccw = ringArea(cr) > 0 ? cr : cr.slice().reverse();
-      for (let i = 0; i < 4; i++) wallQuad(GW, ccw[i], ccw[(i + 1) % 4], wallBottom, wallBottom, base + th, base + th, base, [S.style, seed, null, 2], S.col, th);
-      const apex = [tp[0], base + maxH, tp[1]];
-      for (let i = 0; i < 4; i++) { const a = ccw[i], q = ccw[(i + 1) % 4]; roofTri(GR, [a[0], base + th, a[1]], [q[0], base + th, q[1]], apex, [1, seed, 0, 0], C(0.19, 0.2, 0.23)); }
+      for (let i = 0; i < 4; i++) wallQuad(GW, ccw[i], ccw[(i + 1) % 4], wallBottom, wallBottom, base + th, base + th, base, [S.style, seed, null, 0], S.col, th);
+      const apex = [tp[0], base + maxH, tp[1]], yb = base + th, SC = C(0.6, 0.58, 0.54), rO = ts / Math.cos(Math.PI / 8);
+      const oct = []; for (let k = 0; k < 8; k++) { const a = Math.PI / 8 + k * Math.PI / 4, u = Math.cos(a) * rO, v = Math.sin(a) * rO; oct.push([tp[0] + U[0] * u + V[0] * v, yb, tp[1] + U[1] * u + V[1] * v]); }
+      for (let k = 0; k < 8; k++) roofTri(GR, oct[k], oct[(k + 1) % 8], apex, [4, seed, 0, 0], SC);
+      for (let j = 0; j < 4; j++) { const a = Math.PI / 4 + j * Math.PI / 2, u = Math.cos(a) * ts * Math.SQRT2, v = Math.sin(a) * ts * Math.SQRT2; const Cn = [tp[0] + U[0] * u + V[0] * v, yb, tp[1] + U[1] * u + V[1] * v]; const A1 = oct[(2 * j) % 8], B1 = oct[(2 * j + 1) % 8]; const mid = [(A1[0] + B1[0]) / 2, yb, (A1[2] + B1[2]) / 2]; const D = [lerp(mid[0], apex[0], 0.22), lerp(yb, apex[1], 0.22), lerp(mid[2], apex[2], 0.22)]; roofTri(GR, Cn, A1, D, [4, seed, 0, 0], SC); roofTri(GR, Cn, D, B1, [4, seed, 0, 0], SC); }
     }
     out.push({ id: b.id, outer, holes: b.holes, base, eave, ridge, src, kind: S.kind, c, w0, w1: GW.p.length / 3, r0, r1: GR.p.length / 3, tags: b.tags, os: b.os, listed: b.listed, S });
     if (done % 200 === 0 && onProgress) onProgress(done / W.buildings.length);
@@ -1128,7 +1166,7 @@ const MAJOR = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 
 const roadClass = t => (t.highway || '').replace('_link', '');
 const roadWidth = t => { const w = parseFloat(t.width); if (w > 0 && w < 30) return w; const lanes = parseFloat(t.lanes); const base = ROAD_W[roadClass(t)] ?? 3; return lanes > 0 && VEHICLE.has(t.highway) ? Math.max(base, lanes * 3.2) : base; };
 const SOFT = /^(dirt|gravel|ground|grass|compacted|fine_gravel|earth|mud|sand|woodchips|unpaved)$/;
-function drawMasks(W, buildings, N) {
+function drawMasks(W, buildings, N, paint) {
   const mk = (n) => { const c = document.createElement('canvas'); c.width = c.height = n; const g = c.getContext('2d'); g.setTransform(n / (2 * HALF), 0, 0, n / (2 * HALF), n / 2, n / 2); return [c, g]; };
   const [mc, g] = mk(N);
   const path = (ring) => { g.moveTo(ring[0][0], ring[0][1]); for (let i = 1; i < ring.length; i++) g.lineTo(ring[i][0], ring[i][1]); g.closePath(); };
@@ -1140,7 +1178,7 @@ function drawMasks(W, buildings, N) {
     const t = a.tags; let col = null;
     if (/commercial|retail|industrial|railway|construction|brownfield/.test(t.landuse)) col = '#00ff00';
     if (t.amenity === 'parking' || t.parking) col = '#ff0000';
-    if (t.amenity === 'fuel' || t.highway === 'pedestrian' || t.area === 'yes' && t.highway || t.place === 'square' || /marketplace/.test(t.amenity)) col = '#00ff00';
+    if (t.amenity === 'fuel') col = '#ff0000'; else if (t.highway === 'pedestrian' || t.area === 'yes' && t.highway || t.place === 'square' || /marketplace/.test(t.amenity)) col = '#00ff00';
     if (/school|college|hospital|place_of_worship/.test(t.amenity)) col = null;
     if (/grass|meadow|village_green|cemetery|recreation_ground|allotments/.test(t.landuse) || /park|garden|pitch|common|golf_course|recreation_ground/.test(t.leisure) || t.amenity === 'grave_yard') col = '#0000ff';
     if (/wood|scrub|heath/.test(t.natural) || t.landuse === 'forest') col = '#000096';
@@ -1151,9 +1189,11 @@ function drawMasks(W, buildings, N) {
   }
   for (const b of buildings) { g.beginPath(); path(b.outer); g.fillStyle = '#00ff00'; g.fill(); g.lineWidth = 1.4; g.strokeStyle = '#00ff00'; g.lineJoin = 'round'; g.stroke(); }
   const roads = W.roads.filter(r => r.tags.highway && r.tags.area !== 'yes' && !/^(proposed|construction|corridor|elevator|platform|raceway|bus_stop)$/.test(r.tags.highway) && !(+r.tags.layer < 0) && r.tags.tunnel !== 'yes');
+  for (const r of W.roads) if (r.tags.railway === 'rail' && r.tags.tunnel !== 'yes') line(r.pts, 3.8, '#000000');
   for (const r of roads) { const t = r.tags; if (VEHICLE.has(t.highway) && roadClass(t) !== 'service' && t.sidewalk !== 'no') line(r.pts, roadWidth(t) + (t.sidewalk === 'left' || t.sidewalk === 'right' ? 2.2 : 4.4), '#00ff00'); }
   for (const r of roads) { const t = r.tags; if (!VEHICLE.has(t.highway)) { const soft = SOFT.test(t.surface || '') || /path|track|bridleway/.test(t.highway) && !t.surface; line(r.pts, roadWidth(t), soft ? '#000000' : '#00ff00'); } }
   for (const r of roads) { const t = r.tags; if (VEHICLE.has(t.highway)) line(r.pts, roadWidth(t), SOFT.test(t.surface || '') ? '#000000' : '#ff0000'); }
+  if (paint) paint(g);
   /* ambient occlusion: building contact shadow + canopy shade */
   const AN = 1024, aoArr = new Float32Array(AN * AN).fill(1), s = AN / (2 * HALF);
   const bm = new Uint8Array(AN * AN); for (const b of buildings) fillRingMask(bm, AN, -HALF, -HALF, 1 / s, b.outer, 1);
@@ -1680,6 +1720,132 @@ function buildGraves(graves, terr, collide) {
 }
 
 /* =========================================================================
+   Hero places: built by hand from photographs and listing descriptions
+   ========================================================================= */
+const MEMORIAL_EN = [524239, 163845];   // IWM / Historic England grid reference TQ 24239 63845
+function findMemorial(W, nhle) {
+  const ref = [MEMORIAL_EN[0] - OE, ON - MEMORIAL_EN[1]], near = (x, z) => Math.hypot(x - ref[0], z - ref[1]) < 60;
+  const h = nhle.find(L => /WAR MEMORIAL/i.test(L.name) && near(L.x, L.z)); if (h) return [h.x, h.z];
+  const p = W.points.find(p => (p.tags.memorial === 'war_memorial' || /war memorial/i.test(p.tags.name || '')) && near(p.x, p.z)); if (p) return [p.x, p.z];
+  return ref;
+}
+function findLibrary(W, mem) {
+  let best = null, bd = 90;
+  for (const b of W.buildings) { const t = b.tags; const isLib = t.amenity === 'library' || /library/i.test(t.name || '') || W.points.some(p => p.tags.amenity === 'library' && Math.abs(p.x - b.outer[0][0]) < 80 && inPoly(p.x, p.z, b.outer, b.holes)); if (!isLib) continue; const c = centroid(b.outer); const d = Math.hypot(c[0] - mem[0], c[1] - mem[1]); if (d < bd) { bd = d; best = b; } }
+  return best;
+}
+function memorialGeometry() {
+  const PS = 0xd8d2c2, YS = 0x8a8273, HW = 0x37393a, parts = [];
+  const oct = (r0, r1, h, y, hex) => { const g = new THREE.CylinderGeometry(r1, r0, h, 8); g.rotateY(Math.PI / 8); g.translate(0, y + h / 2, 0); return colored(g, hex); };
+  parts.push(oct(2.5, 2.48, 0.2, -0.06, YS), oct(2.08, 2.06, 0.18, 0.14, YS), box(1.78, 0.24, 1.78, 0, 0.44, 0, YS));
+  parts.push(box(1.24, 1.32, 1.24, 0, 1.22, 0, PS));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { parts.push(box(0.3, 1.18, 0.3, sx * 0.6, 1.15, sz * 0.6, PS)); parts.push(box(0.22, 0.2, 0.22, sx * 0.6, 1.84, sz * 0.6, PS)); }
+  parts.push(box(1.46, 0.16, 1.46, 0, 1.96, 0, PS), box(1.3, 0.08, 1.3, 0, 2.08, 0, PS));
+  for (let k = 0; k < 4; k++) { const g = new THREE.BoxGeometry(0.62, 0.46, 0.02); g.translate(0, 1.24, 0.63); g.rotateY(k * Math.PI / 2); parts.push(colored(g, HW)); const f = new THREE.BoxGeometry(0.72, 0.56, 0.015); f.translate(0, 1.24, 0.622); f.rotateY(k * Math.PI / 2); parts.push(colored(f, 0xc9c3b3)); }
+  parts.push(box(0.92, 0.28, 0.92, 0, 2.26, 0, PS), oct(0.42, 0.36, 0.3, 2.4, PS));
+  parts.push(oct(0.21, 0.15, 3.3, 2.7, PS));
+  parts.push(oct(0.17, 0.27, 0.32, 6.0, PS), box(0.5, 0.09, 0.5, 0, 6.36, 0, PS));
+  parts.push(box(0.14, 0.98, 0.13, 0, 6.89, 0, PS), box(0.7, 0.14, 0.13, 0, 6.98, 0, PS));
+  const ring = new THREE.TorusGeometry(0.23, 0.045, 8, 32); ring.translate(0, 6.98, 0); parts.push(colored(ring, PS));
+  return mergeGeometries(parts);
+}
+function wreathGeometry() {
+  const parts = [];
+  for (let k = 0; k < 7; k++) {
+    const a = (k - 3) * 0.32, r = 1.95, x = Math.sin(a) * r, z = Math.cos(a) * r, rr = 0.17 + (k % 3) * 0.04;
+    const red = new THREE.TorusGeometry(rr, 0.065, 6, 18); red.rotateX(Math.PI / 2); red.translate(x, 0.37, z); parts.push(colored(red, k % 4 === 2 ? 0x8a1e5a : 0xb0121c));
+    const leaf = new THREE.TorusGeometry(rr * 0.55, 0.03, 5, 14); leaf.rotateX(Math.PI / 2); leaf.translate(x, 0.36, z); parts.push(colored(leaf, 0x2c4a22));
+  }
+  return mergeGeometries(parts);
+}
+function makePortlandMaterial() {
+  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9 }); m.name = 'portland';
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = 'varying vec3 vWPm; varying vec3 vLocM;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vLocM = position; vWPm = (modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = 'varying vec3 vWPm; varying vec3 vLocM;\n' + GLSL_NOISE + sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float gn = fbm(vWPm.xz*3.0 + vWPm.y*2.5); diffuseColor.rgb *= 0.86 + 0.24*gn;
+      float streak = smoothstep(0.5, 0.85, vnoise(vec2((vWPm.x + vWPm.z)*6.0, vWPm.y*0.8))); diffuseColor.rgb *= 1.0 - streak*0.22*smoothstep(1.0, 3.0, vLocM.y);
+      float lich = smoothstep(0.62, 0.8, fbm(vWPm.xz*2.0 + vWPm.y*1.3)); diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42,0.44,0.34), lich*0.35);
+      diffuseColor.rgb *= mix(0.72, 1.0, smoothstep(0.0, 0.5, vLocM.y));`);
+  };
+  m.customProgramCacheKey = () => 'portland';
+  return m;
+}
+function buildMemorial(pos, rot, terr, collide) {
+  const g = new THREE.Group();
+  const stone = new THREE.Mesh(memorialGeometry(), makePortlandMaterial()); stone.castShadow = stone.receiveShadow = true;
+  const wreaths = new THREE.Mesh(wreathGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75 })); wreaths.castShadow = wreaths.receiveShadow = true;
+  g.add(stone, wreaths); g.position.set(pos[0], terr(pos[0], pos[1]) - 0.02, pos[1]); g.rotation.y = rot;
+  collide.add(pos[0], pos[1], pos[0], pos[1], { a: [pos[0], pos[1]], b: [pos[0], pos[1]], r: 1.05 });
+  return g;
+}
+
+/* =========================================================================
+   Railway (ballast, sleepers, rails, platforms, canopies) and roof-only canopies
+   ========================================================================= */
+function ribbonAt(arr, pts, off, wid, dash, gap, lift, terr) {
+  const segs = []; let s0 = 0; for (let i = 1; i < pts.length; i++) { const a = pts[i - 1], b = pts[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 1e-3) continue; segs.push({ a, b, L, s: s0 }); s0 += L; }
+  if (!segs.length) return; const total = s0;
+  const P = s => { for (const g of segs) if (s <= g.s + g.L || g === segs[segs.length - 1]) { const t = clamp((s - g.s) / g.L, 0, 1), dx = (g.b[0] - g.a[0]) / g.L, dz = (g.b[1] - g.a[1]) / g.L; return [g.a[0] + (g.b[0] - g.a[0]) * t, g.a[1] + (g.b[1] - g.a[1]) * t, dz, -dx]; } };
+  for (let s = 0; s < total; s += dash + gap) {
+    const e = Math.min(total, s + dash); let prev = null;
+    for (let u = s; ; u += Math.min(2, Math.max(0.1, e - s))) {
+      const p = P(Math.min(u, e)), l = [p[0] + p[2] * (off - wid / 2), p[1] + p[3] * (off - wid / 2)], r = [p[0] + p[2] * (off + wid / 2), p[1] + p[3] * (off + wid / 2)];
+      const cur = [[l[0], terr(l[0], l[1]) + lift, l[1]], [r[0], terr(r[0], r[1]) + lift, r[1]]];
+      if (prev) arr.push(...prev[0], ...cur[0], ...prev[1], ...prev[1], ...cur[0], ...cur[1]);
+      prev = cur; if (u >= e) break;
+    }
+  }
+}
+function bufferLine(pts, w) { const L = [], R = []; for (let i = 0; i < pts.length; i++) { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(pts.length - 1, i + 1)], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1, nx = dz / l * w / 2, nz = -dx / l * w / 2; L.push([pts[i][0] + nx, pts[i][1] + nz]); R.push([pts[i][0] - nx, pts[i][1] - nz]); } return L.concat(R.reverse()); }
+function flatMesh(arr, hex, rough = 0.85, metal = 0) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3)); g.computeVertexNormals(); const n = g.attributes.normal; for (let i = 0; i < n.count; i++) n.setXYZ(i, 0, 1, 0); const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: metal, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 })); m.receiveShadow = true; m.castShadow = true; return m; }
+function placeBox(parts, ctr, U, len, wid, h, y, hex) { const g = new THREE.BoxGeometry(len, h, wid); g.rotateY(Math.atan2(-U[1], U[0])); g.translate(ctr[0], y + h / 2, ctr[1]); parts.push(colored(g, hex)); }
+function buildRailway(W, terr, collide, station, wallMat, roofMat, propMat) {
+  const group = new THREE.Group(), RA = [], SL = [];
+  for (const r of W.roads) { const t = r.tags; if (t.railway !== 'rail' || t.tunnel === 'yes' || r.pts.length < 2) continue; ribbonAt(SL, r.pts, 0, 2.5, 0.24, 0.41, 0.09, terr); for (const s of [-0.7175, 0.7175]) ribbonAt(RA, r.pts, s, 0.075, 1e6, 0, 0.19, terr); }
+  if (SL.length) group.add(flatMesh(SL, 0x5e5a55, 0.95)); if (RA.length) group.add(flatMesh(RA, 0x8b8782, 0.35, 0.8));
+  const plats = [];
+  for (const a of W.areas) if (a.tags.railway === 'platform' || (a.tags.public_transport === 'platform' && a.tags.train === 'yes')) plats.push(a.outer.slice());
+  for (const r of W.roads) if (r.tags.railway === 'platform' && !near(r.pts[0], r.pts[r.pts.length - 1])) plats.push(bufferLine(r.pts, parseFloat(r.tags.width) || 3.2));
+  const GWp = new GB(), GRp = new GB(), parts = [];
+  for (let ring of plats) {
+    if (ringArea(ring) < 0) ring = ring.slice().reverse(); if (Math.abs(ringArea(ring)) < 20) continue;
+    let mx = -Infinity; for (const p of ring) mx = Math.max(mx, terr(p[0], p[1])); const top = mx + 0.95, bot = mx - 1.5;
+    for (let i = 0; i < ring.length; i++) { const a = ring[i], q = ring[(i + 1) % ring.length]; wallQuad(GWp, a, q, bot, bot, top, top, bot, [0, 0.3, null, 2], C(0.42, 0.24, 0.17), 99); collide.add(a[0], a[1], q[0], q[1], { a, b: q, r: 0 }); }
+    const tris = THREE.ShapeUtils.triangulateShape(ring.map(p => new THREE.Vector2(p[0], p[1])), []);
+    for (const t of tris) roofTri(GRp, [ring[t[0]][0], top, ring[t[0]][1]], [ring[t[1]][0], top, ring[t[1]][1]], [ring[t[2]][0], top, ring[t[2]][1]], [2, 0.2, 0, 0], C(0.33, 0.33, 0.31));
+    const ob = obb(ring); if (!ob || !station) continue;
+    if (Math.hypot(ob.cx - station[0], ob.cz - station[1]) > 160) continue;
+    const su = clamp((station[0] - ob.cx) * ob.U[0] + (station[1] - ob.cz) * ob.U[1], -ob.hl + 30, ob.hl - 30), len = Math.min(2 * ob.hl - 6, 70), cw = Math.max(2.2, ob.hw * 1.5);
+    const cc = OB(ob, su, 0); placeBox(parts, cc, ob.U, len, cw, 0.14, top + 3.25, 0xbfc4c6); placeBox(parts, OB(ob, su, cw / 2), ob.U, len, 0.05, 0.4, top + 3.0, 0xe9e9e4); placeBox(parts, OB(ob, su, -cw / 2), ob.U, len, 0.05, 0.4, top + 3.0, 0xe9e9e4);
+    for (let u = su - len / 2 + 3; u <= su + len / 2 - 3; u += 6) { const p = OB(ob, u, 0); placeBox(parts, p, ob.U, 0.16, 0.16, 3.25, top, 0x2f4136); collide.add(p[0], p[1], p[0], p[1], { a: p, b: p, r: 0.12 }); }
+  }
+  if (GWp.p.length) { const m = new THREE.Mesh(GWp.build(), wallMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  if (GRp.p.length) { const m = new THREE.Mesh(GRp.build(), roofMat); m.receiveShadow = true; group.add(m); }
+  if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), propMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  return group;
+}
+function buildCanopies(W, terr, dtm, dsm, collide, wallMat, roofMat, propMat) {
+  const group = new THREE.Group(), GWc = new GB(), GRc = new GB(), parts = [];
+  for (const cn of W.canopies) {
+    let ring = cn.outer; if (ring.length < 3) continue; if (ringArea(ring) < 0) ring = ring.slice().reverse(); const A = Math.abs(ringArea(ring)); if (A < 8 || A > 3000) continue;
+    const c = centroid(ring); let g0 = Infinity; for (const p of ring) g0 = Math.min(g0, terr(p[0], p[1]));
+    let top = parseFloat(cn.tags.height) || 0;
+    if (!top && dsm) { const hs = []; const [xs, zs, xe, ze] = bboxOf(ring); for (let z = zs + 0.5; z < ze; z += 1) for (let x = xs + 0.5; x < xe; x += 1) if (inRing(x, z, ring)) hs.push(dsm.at(x, z) - g0); hs.sort((a, b) => a - b); if (hs.length) top = pct(hs, 0.6); }
+    top = clamp(top || 4.8, 2.6, 9); const y = g0 + top, col = tagColour(cn.tags['building:colour']) || C(0.85, 0.85, 0.83);
+    for (let i = 0; i < ring.length; i++) { const a = ring[i], q = ring[(i + 1) % ring.length]; wallQuad(GWc, a, q, y - 0.6, y - 0.6, y, y, y - 0.6, [1, 0.5, null, 2], col, 99); }
+    const tris = THREE.ShapeUtils.triangulateShape(ring.map(p => new THREE.Vector2(p[0], p[1])), []);
+    for (const t of tris) { roofTri(GRc, [ring[t[0]][0], y, ring[t[0]][1]], [ring[t[1]][0], y, ring[t[1]][1]], [ring[t[2]][0], y, ring[t[2]][1]], [2, 0.4, 0, 0], C(0.4, 0.4, 0.39)); roofTri(GRc, [ring[t[0]][0], y - 0.6, ring[t[0]][1]], [ring[t[1]][0], y - 0.6, ring[t[1]][1]], [ring[t[2]][0], y - 0.6, ring[t[2]][1]], [2, 0.6, 0, 0], C(0.8, 0.8, 0.78)); }
+    const ob = obb(ring); if (!ob) continue; const nu = ob.hl > 9 ? 3 : 2;
+    for (let k = 0; k < nu; k++) for (const sv of [-1, 1]) { const u = nu === 1 ? 0 : -ob.hl + 1.2 + k * (2 * ob.hl - 2.4) / (nu - 1); const p = OB(ob, u, sv * Math.max(0, ob.hw - 1.2)); const gg = new THREE.CylinderGeometry(0.16, 0.16, top - 0.6, 10); gg.translate(p[0], g0 + (top - 0.6) / 2, p[1]); parts.push(colored(gg, 0xd8d8d4)); collide.add(p[0], p[1], p[0], p[1], { a: p, b: p, r: 0.18 }); }
+  }
+  if (GWc.p.length) { const m = new THREE.Mesh(GWc.build(), wallMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  if (GRc.p.length) { const m = new THREE.Mesh(GRc.build(), roofMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), propMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  return group;
+}
+
+/* =========================================================================
    Sun, sky and time
    ========================================================================= */
 function lastSunday(y, m) { const d = new Date(Date.UTC(y, m + 1, 0)); return d.getUTCDate() - d.getUTCDay(); }
@@ -1846,6 +2012,13 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     const weatherIds = new Set(); for (const b of W.buildings) { const t = b.tags; const hn = parseInt(t['addr:housenumber']); if (/broadway/i.test(t['addr:street'] || '') && hn >= 43 && hn <= 57 && hn % 2) weatherIds.add(b.id); }
     const pois = assignSigns(W, collectPOIs(W), roadDist);
     const nOS = matchOS(W, extra.os); matchNHLE(W, extra.nhle || []);
+    const memPos = findMemorial(W, extra.nhle || []); const lib = findLibrary(W, memPos); if (lib) lib.hero = 'library1962';
+    let memRot = 0; { let bs = 1e9, best = 0; for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2, d = roadDist(memPos[0] + Math.sin(a) * 12, memPos[1] + Math.cos(a) * 12); if (d < bs) { bs = d; best = a; } } memRot = Math.round(best / (Math.PI / 2)) * (Math.PI / 2); }
+    const memF = [Math.sin(memRot), Math.cos(memRot)], memR = [Math.cos(memRot), -Math.sin(memRot)];
+    let memHS = 18; for (const b of W.buildings) { const c = b.outer[0]; if (Math.abs(c[0] - memPos[0]) > 60 || Math.abs(c[1] - memPos[1]) > 60) continue; memHS = Math.min(memHS, ringsDist(memPos[0], memPos[1], [b.outer]) - 1.5); }
+    memHS = clamp(Math.min(memHS, roadDist(memPos[0], memPos[1]) - 1.2), 7, 18);
+    const memP = (f, r) => [memPos[0] + memF[0] * f + memR[0] * r, memPos[1] + memF[1] * f + memR[1] * r];
+    { const h = memHS, gap = 1.6; for (const side of [[memP(-h, -h), memP(-h, h)], [memP(-h, h), memP(h, h)], [memP(-h, -h), memP(h, -h)], [memP(h, h), memP(h, gap)], [memP(h, -gap), memP(h, -h)]]) W.barriers.push({ pts: side, tags: { barrier: 'hedge', height: '1.1' } }); }
     const ctx = { roadDist, majorDist, cross, shopNodes, weatherIds, ov: overrides.b };
     const B = buildBuildings(W, terr, dtm, dsm, ctx, f => step('bld', 'on', Math.round(f * 100) + '%'));
     const lidarN = B.list.filter(b => b.src === 'lidar').length;
@@ -1856,7 +2029,10 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     await tick();
     /* --- ground --- */
     step('veg', 'on');
-    const M = drawMasks(W, B.list, Q.mask);
+    const M = drawMasks(W, B.list, Q.mask, g => {
+      const h = memHS; g.beginPath(); for (const [f, r] of [[-h, -h], [-h, h], [h, h], [h, -h]]) { const p = memP(f, r); g.lineTo(p[0], p[1]); } g.closePath(); g.fillStyle = '#0000ff'; g.fill();
+      g.beginPath(); for (let k = 0; k < 8; k++) { const a = memRot + Math.PI / 8 + k * Math.PI / 4; g.lineTo(memPos[0] + Math.sin(a) * 6.2, memPos[1] + Math.cos(a) * 6.2); } g.closePath(); g.fillStyle = '#ff0000'; g.fill();
+      const e = memP(h + 3, 0), s0 = memP(5, 0); g.beginPath(); g.moveTo(s0[0], s0[1]); g.lineTo(e[0], e[1]); g.lineWidth = 2.0; g.strokeStyle = '#ff0000'; g.stroke(); });
     const maskTex = new THREE.CanvasTexture(M.mask); maskTex.flipY = false; maskTex.minFilter = THREE.LinearMipmapLinearFilter; maskTex.anisotropy = 8; maskTex.colorSpace = THREE.NoColorSpace;
     const SN = 1024, sc = document.createElement('canvas'); sc.width = sc.height = SN; const sg = sc.getContext('2d', { willReadFrequently: true }); sg.drawImage(M.mask, 0, 0, SN, SN); const md = sg.getImageData(0, 0, SN, SN).data;
     const maskS = (x, z) => { const i = clamp(((x + HALF) / size * SN) | 0, 0, SN - 1), j = clamp(((z + HALF) / size * SN) | 0, 0, SN - 1), k = (j * SN + i) * 4; return [md[k], md[k + 1], md[k + 2]]; };
@@ -1913,11 +2089,16 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
       }
     }
     if (GBr.p.length) { const bm = new THREE.Mesh(GBr.build(), wallMat); bm.castShadow = bm.receiveShadow = true; scene.add(bm); }
+    const stP = W.points.find(p => p.tags.railway === 'station' || (p.tags.public_transport === 'station' && p.tags.train !== 'no')); const station = stP ? [stP.x, stP.z] : ll2xz(-0.2147, 51.356);
+    const fixMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.1 });
+    scene.add(buildRailway(W, terr, collide, station, wallMat, roofMat, fixMat));
+    scene.add(buildCanopies(W, terr, dtm, dsm, collide, wallMat, roofMat, fixMat));
     /* collision: building edges + tree trunks */
     const bldH = new Hash(16);
     for (const b of B.list) { for (const r of [b.outer, ...b.holes]) for (let i = 0; i < r.length; i++) { const a = r[i], q = r[(i + 1) % r.length]; collide.add(a[0], a[1], q[0], q[1], { a, b: q, r: 0 }); } let xs = Infinity, xe = -Infinity, zs = Infinity, ze = -Infinity; for (const p of b.outer) { xs = Math.min(xs, p[0]); xe = Math.max(xe, p[0]); zs = Math.min(zs, p[1]); ze = Math.max(ze, p[1]); } bldH.add(xs, zs, xe, ze, b); }
     for (const t of trees) if (t.src !== 'band') collide.add(t.x, t.z, t.x, t.z, { a: [t.x, t.z], b: [t.x, t.z], r: clamp(t.r * 0.07, 0.2, 0.5) });
     const insideBuilding = (x, z) => { for (const b of bldH.query(x, z, 0)) if (inPoly(x, z, b.outer, b.holes)) return true; return false; };
+    scene.add(buildMemorial(memPos, memRot, terr, collide));
     const graves = placeGraves(W, B.list, trees, collide, maskS, insideBuilding, extra.nhle || []);
     scene.add(buildGraves(graves, terr, collide));
     await tick();
@@ -1987,6 +2168,7 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
    ========================================================================= */
 const LM_DEF = [
   { id: 'cross', name: 'Cheam crossroads', era: 'Village centre', auto: 'cross', text: 'The heart of the old village, where four roads meet. Road widening between the wars pulled down several old buildings (one was moved rather than demolished), and the mock-Tudor parades, with their black timbering and leaded lights, belong to that rebuilding. The conservation area was designated in 1970.' },
+  { id: 'memorial', name: 'Cheam War Memorial', era: 'Unveiled 16 March 1921 · Grade II', auto: 'memorial', text: 'A First World War memorial designed by C J Marshall: a Portland stone wheel-head cross on York stone steps, with name panels of Hopton Wood stone. Names from the Second World War were added later. It stands in the memorial garden beside Cheam Library, built in 1962 on the site of West Cheam Manor house.' },
   { id: 'whitehall', name: 'Whitehall', era: 'Built around 1500 · Grade II*', re: /^whitehall/i, ll: [-0.2172, 51.3594], text: 'A timber-framed house begun around 1500 and later clad in white weatherboarding, the usual explanation for its name. It is one of the best-known buildings in the village and now opens as a historic house museum.' },
   { id: 'lumley', name: 'Lumley Chapel', era: 'Medieval · cared for by the Churches Conservation Trust', re: /lumley/i, ll: [-0.2161, 51.3606], text: 'The surviving chancel of Cheam\'s medieval parish church, kept when the rest was pulled down in 1864. A bricked-up window is thought to be late Saxon or early Norman. Inside are monuments to the Lumley family of Nonsuch.' },
   { id: 'dunstan', name: 'St Dunstan\'s Church', era: '1864 · Grade II*', re: /dunstan/i, text: 'The Victorian parish church, built in 1864 beside the old chapel on the site of the medieval church. Its spire is a landmark from all over the village; in this model it is raised to the height the LiDAR measured.' },
@@ -2002,6 +2184,7 @@ function resolveLandmarks(W, blist, cross, nhle = []) {
   for (const L of LM_DEF) {
     let pos = null;
     if (L.auto === 'cross') pos = cross;
+    else if (L.auto === 'memorial') pos = findMemorial(W, nhle);
     else if (L.auto === 'cottages') { const bs = W.buildings.filter(b => { const t = b.tags, hn = parseInt(t['addr:housenumber']); return /broadway/i.test(t['addr:street'] || '') && hn >= 43 && hn <= 57; }); if (bs.length) { const cs = bs.map(b => centroid(b.outer)); pos = [cs.reduce((s, c) => s + c[0], 0) / cs.length, cs.reduce((s, c) => s + c[1], 0) / cs.length]; } }
     else {
       const cands = [];
