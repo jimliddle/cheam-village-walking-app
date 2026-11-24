@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; connect-src https:; img-src data: blob:; style-src 'unsafe-inline'; worker-src blob:; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>Cheam Village Walk</title>
+<title>Cheam Village Walk · v1.0</title>
 <style>
 /*
 VOICE: quiet heritage guide; the village does the talking.
@@ -90,6 +90,8 @@ a{color:#fff}
 #card h4{margin:0;font-size:22px;font-weight:600;line-height:1.15}
 #card .era{color:#ff9aa6;font-size:13px;margin:2px 0 6px}
 #card p{margin:0;font-size:14.5px;color:#ddd7cc}
+#ver{font-size:12px;letter-spacing:.04em;color:var(--dim);margin:-4px 0 8px}
+#verTag{position:absolute;right:14px;bottom:calc(6px + var(--sab));font-size:11px;color:rgba(255,255,255,.55);text-shadow:0 1px 2px rgba(0,0,0,.6);pointer-events:none;z-index:5}
 #hint{position:absolute;left:14px;bottom:calc(14px + var(--sab));padding:8px 12px;font-size:13px;color:var(--dim);max-width:min(420px,calc(100% - 230px));transition:opacity 1s}
 #toast{position:absolute;left:50%;top:calc(60px + var(--sat));transform:translateX(-50%);padding:8px 14px;font-size:14px;opacity:0;transition:opacity .4s}
 #toast.show{opacity:1}
@@ -147,7 +149,8 @@ a{color:#fff}
     </div>
   </div>
   <div id="cross"></div>
-  <div id="hint" class="glass">Click to look around · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> stride · <kbd>M</kbd> map · <kbd>E</kbd> edit look · <kbd>Esc</kbd> menu</div>
+  <div id="verTag">v1.0</div>
+  <div id="hint" class="glass">Click to look around · <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> walk · <kbd>Shift</kbd> stride · <kbd>M</kbd> map · <kbd>E</kbd> edit look · <kbd>Esc</kbd> free the mouse (twice for the menu)</div>
   <div id="card" class="glass" aria-live="polite"><h4 class="serif" id="cT"></h4><div class="era" id="cE"></div><p id="cP"></p></div>
   <canvas id="mini" width="376" height="376" aria-label="Minimap, click for full map"></canvas>
   <div id="joy" class="hidden"><i></i></div>
@@ -197,6 +200,7 @@ a{color:#fff}
     </svg>
     <div class="head">
       <h1 class="serif" id="ttl">Cheam Village</h1>
+      <div class="ver" id="ver">Version 1.0 · 24 November 2026</div>
       <p>Walk the old village in first person. Streets and buildings come live from OpenStreetMap; the ground, roof heights and trees come from the Environment Agency's 1&nbsp;m LiDAR survey of England.</p>
     </div>
     <div class="go">
@@ -258,7 +262,7 @@ a{color:#fff}
     <div class="pane hidden" id="pA">
       <h3>How it's made</h3>
       <p>The ground is the LiDAR digital terrain model. Each building's eaves and ridge are read from the LiDAR surface model inside its OpenStreetMap footprint, and the map is nudged a few metres to line up with the LiDAR before anything is built. Trees are found as peaks in the canopy height model (surface minus terrain) outside buildings. Walls, roofs and pavements are drawn by shaders: stretcher-bond brick, weatherboarding, coursed stone, half-timbering with leaded lights, clay tiles and slate.</p>
-      <div class="keys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows: walk</span><span><kbd>Shift</kbd>: stride</span><span><kbd>M</kbd>: map</span><span><kbd>T</kbd>: next landmark</span><span><kbd>Esc</kbd>: menu</span><span>Touch: left thumb walks, right thumb looks</span></div>
+      <div class="keys"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows: walk</span><span><kbd>Shift</kbd>: stride</span><span><kbd>M</kbd>: map</span><span><kbd>T</kbd>: next landmark</span><span><kbd>Esc</kbd>: free the mouse · again for this menu</span><span>Mouse free: drag to look</span><span>Touch: left thumb walks, right thumb looks</span></div>
       <h3 style="margin-top:18px">Credits</h3>
       <p>Map data © OpenStreetMap contributors, ODbL. LiDAR © Environment Agency copyright and/or database right, Open Government Licence v3. Listed buildings © Historic England, Open Government Licence v3. Building age and materials (optional) © Crown copyright and database rights, Ordnance Survey. Fallback terrain: Tilezen/Mapzen Terrarium tiles. Rendering: three.js (MIT). Where no source records a building's materials, its look is inferred from its age, use and location; use Edit look (E) to correct any building you know.</p>
     </div>
@@ -284,6 +288,7 @@ import Delaunator from 'delaunator';
 const CENTER = { lat: 51.3578, lon: -0.2217 };   // spans Nonsuch Mansion, the village and Cheam station
 const HALF = 700;            // half-size of the modelled square, metres
 const EDGE = 60;             // how close to the edge you may walk
+const APP_VERSION = '1.0', APP_DATE = '24 November 2026';   // bump with every update
 const CACHE_V = 'cheam-v3';
 const $ = s => document.querySelector(s);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -2635,14 +2640,16 @@ function findStandingSpot(x, z, rmin = 6, rmax = 45) {
 }
 function teleport(x, z, lookAt) { const [px, pz] = findStandingSpot(x, z, lookAt ? 8 : 0.5, 50); player.x = px; player.z = pz; if (lookAt) player.yaw = Math.atan2(-(lookAt[0] - px), -(lookAt[1] - pz)); player.pitch = lookAt ? 0.08 : player.pitch; player.vx = player.vz = 0; if (world.grass) world.grass.last = null; }
 const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 }, look = { id: null, x: 0, y: 0 };
+let unlockAt = -1e9;
 function bindInput() {
   const cv = $('#c');
-  addEventListener('keydown', e => { const k = e.key.toLowerCase(); if (!$('#edit').classList.contains('hidden')) { if (k === 'escape') closeEdit(); return; } if (!$('#bigmap').classList.contains('hidden') && (k === 'm' || k === 'escape')) { toggleBig(); return; } if (!running) return; if (k === 'escape' && !locked) { openMenu(); return; } keys.add(k); if (k === 'm') toggleBig(); if (k === 'e') { keys.delete('e'); openEdit(); } if (k === 't') nextLandmark(); if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault(); });
+  addEventListener('keydown', e => { const k = e.key.toLowerCase(); if (!$('#edit').classList.contains('hidden')) { if (k === 'escape') closeEdit(); return; } if (!$('#bigmap').classList.contains('hidden') && (k === 'm' || k === 'escape')) { toggleBig(); return; } if (!running) return; if (k === 'escape' && !locked) { if (performance.now() - unlockAt > 400) openMenu(); return; } keys.add(k); if (k === 'm') toggleBig(); if (k === 'e') { keys.delete('e'); openEdit(); } if (k === 't') nextLandmark(); if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault(); });
   addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
   addEventListener('blur', () => keys.clear());
-  cv.addEventListener('click', () => { if (running && !isTouch && !locked) cv.requestPointerLock?.()?.catch?.(() => { }); });
-  document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; if (!locked && running && !isTouch && $('#bigmap').classList.contains('hidden') && $('#edit').classList.contains('hidden')) openMenu(); });
-  addEventListener('mousemove', e => { if (!locked) return; const s = 0.0022 * settings.sens; player.yaw -= e.movementX * s; player.pitch = clamp(player.pitch - e.movementY * s, -1.35, 1.35); });
+  cv.addEventListener('click', () => { if (running && !isTouch && !locked && moved < 6) cv.requestPointerLock?.()?.catch?.(() => { }); });
+  document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === cv; if (!locked) unlockAt = performance.now(); if (!locked && running && !isTouch && $('#bigmap').classList.contains('hidden') && $('#edit').classList.contains('hidden')) toast('Mouse released · click the view to look around again · Esc for the menu'); });
+  let drag = false, moved = 0; cv.addEventListener('mousedown', e => { drag = e.button === 0; moved = 0; }); addEventListener('mouseup', () => { drag = false; });
+  addEventListener('mousemove', e => { if (!locked && !(drag && running && e.buttons & 1)) return; if (!locked) moved += Math.abs(e.movementX) + Math.abs(e.movementY); const s = 0.0022 * settings.sens; player.yaw -= e.movementX * s; player.pitch = clamp(player.pitch - e.movementY * s, -1.35, 1.35); });
   cv.addEventListener('touchstart', e => { if (!running) return; for (const t of e.changedTouches) { if (t.clientX < innerWidth * 0.45 && joy.id === null) { joy.id = t.identifier; joy.ox = t.clientX; joy.oy = t.clientY; joy.x = joy.y = 0; const j = $('#joy'); j.style.left = (t.clientX - 65) + 'px'; j.style.top = (t.clientY - 65) + 'px'; j.style.bottom = 'auto'; } else if (look.id === null) { look.id = t.identifier; look.x = t.clientX; look.y = t.clientY; } } e.preventDefault(); }, { passive: false });
   cv.addEventListener('touchmove', e => { for (const t of e.changedTouches) { if (t.identifier === joy.id) { let dx = t.clientX - joy.ox, dy = t.clientY - joy.oy; const L = Math.hypot(dx, dy); if (L > 55) { dx *= 55 / L; dy *= 55 / L; } joy.x = dx / 55; joy.y = dy / 55; $('#joy i').style.transform = `translate(${dx}px,${dy}px)`; } if (t.identifier === look.id) { const s = 0.0045 * settings.sens; player.yaw -= (t.clientX - look.x) * s; player.pitch = clamp(player.pitch - (t.clientY - look.y) * s, -1.3, 1.3); look.x = t.clientX; look.y = t.clientY; } } e.preventDefault(); }, { passive: false });
   const end = e => { for (const t of e.changedTouches) { if (t.identifier === joy.id) { joy.id = null; joy.x = joy.y = 0; $('#joy i').style.transform = ''; const j = $('#joy'); j.style.left = ''; j.style.top = ''; j.style.bottom = ''; } if (t.identifier === look.id) look.id = null; } };
