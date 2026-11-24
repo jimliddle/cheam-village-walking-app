@@ -281,10 +281,10 @@ import Delaunator from 'delaunator';
 /* =========================================================================
    Constants & small helpers
    ========================================================================= */
-const CENTER = { lat: 51.3578, lon: -0.2156 };   // between the village crossroads and Cheam station
-const HALF = 600;            // half-size of the modelled square, metres
+const CENTER = { lat: 51.3578, lon: -0.2217 };   // spans Nonsuch Mansion, the village and Cheam station
+const HALF = 700;            // half-size of the modelled square, metres
 const EDGE = 60;             // how close to the edge you may walk
-const CACHE_V = 'cheam-v2';
+const CACHE_V = 'cheam-v3';
 const $ = s => document.querySelector(s);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -411,9 +411,9 @@ const Store = (() => {
    Settings
    ========================================================================= */
 const QUALITY = {
-  low:    { pr: 1,    shadow: 1024, shadowR: 45, seg: 300, mask: 2048, grass: 0,     trees: 1800, cards: 120, lod: 35, composer: false, samples: 0 },
-  medium: { pr: 1.25, shadow: 2048, shadowR: 60, seg: 400, mask: 2048, grass: 14000, trees: 3200, cards: 190, lod: 55, composer: true,  samples: 2 },
-  high:   { pr: 1.75, shadow: 4096, shadowR: 75, seg: 560, mask: 4096, grass: 32000, trees: 5000, cards: 260, lod: 80, composer: true,  samples: 4 },
+  low:    { pr: 1,    shadow: 1024, shadowR: 45, seg: 340, mask: 2048, grass: 0,     trees: 2200, cards: 120, lod: 35, composer: false, samples: 0 },
+  medium: { pr: 1.25, shadow: 2048, shadowR: 60, seg: 460, mask: 2048, grass: 14000, trees: 3800, cards: 190, lod: 55, composer: true,  samples: 2 },
+  high:   { pr: 1.75, shadow: 4096, shadowR: 75, seg: 640, mask: 4096, grass: 32000, trees: 6000, cards: 260, lod: 80, composer: true,  samples: 4 },
 };
 const DEF = { quality: isTouch ? 'low' : 'high', date: 'today', time: 14.5, fov: 72, sens: 1, bob: true, proxy: '', osKey: '' };
 let overrides = { b: {}, s: {} };
@@ -571,8 +571,9 @@ function shiftWorld(W, dx, dz) {
 /* Align OSM footprints to the LiDAR by maximising overlap with the above-ground mask */
 function registerToLidar(W, dtm, dsm) {
   const R = 280, N = 2 * R, bm = new Uint8Array(N * N), lm = new Uint8Array(N * N);
-  for (const b of W.buildings) { const a = Math.abs(ringArea(b.outer)); if (a > 25 && a < 3000) fillRingMask(bm, N, -R, -R, 1, b.outer, 1); }
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const x = i - R + 0.5, z = j - R + 0.5; lm[j * N + i] = dsm.at(x, z) - dtm.at(x, z) > 2.2 ? 1 : 0; }
+  let mx = 0, mz = 0, mc = 0; for (const b of W.buildings) { const c = b.outer[0]; mx += c[0]; mz += c[1]; mc++; } const ox = Math.round(clamp(mc ? mx / mc : 0, -HALF + R, HALF - R)), oz = Math.round(clamp(mc ? mz / mc : 0, -HALF + R, HALF - R));
+  for (const b of W.buildings) { const a = Math.abs(ringArea(b.outer)); if (a > 25 && a < 3000) fillRingMask(bm, N, ox - R, oz - R, 1, b.outer, 1); }
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const x = ox + i - R + 0.5, z = oz + j - R + 0.5; lm[j * N + i] = dsm.at(x, z) - dtm.at(x, z) > 2.2 ? 1 : 0; }
   const idx = []; for (let k = 0; k < bm.length; k++) if (bm[k]) idx.push(k);
   if (idx.length < 400) return { dx: 0, dz: 0, gain: 1, fit: 0 };
   const S = 8, D = 2 * S + 1, sc = new Float64Array(D * D); let best = -1, bx = 0, bz = 0;
@@ -692,6 +693,7 @@ vec3 stone(vec2 uv, vec3 base, inout float h){
 `,
     fMap: /* glsl */`
 vec2 uv = vUvM; float style = vInfo.x, seed = vInfo.y, edgeLen = vInfo.z, flags = vInfo.w;
+float fPlinth = mod(floor(flags/64.0), 2.0);
 float fShop = mod(flags, 2.0), fNoWin = mod(floor(flags/2.0), 2.0), fFront = mod(floor(flags/4.0), 2.0), fGarage = mod(floor(flags/8.0), 2.0), fReal = mod(floor(flags/16.0), 2.0), fPub = mod(floor(flags/32.0), 2.0);
 float pci = floor(h21(vec2(vInfo.y*997.0, 21.0))*4.0); vec3 pubCol = pci < 1.0 ? vec3(0.02,0.09,0.05) : pci < 2.0 ? vec3(0.17,0.02,0.03) : pci < 3.0 ? vec3(0.02,0.04,0.1) : vec3(0.015);
 int st = int(style + 0.5);
@@ -723,13 +725,46 @@ else if (st == 9) {
   sRough = mix(sRough, 0.06, gl); sMetal = mix(sMetal, 0.45, gl); sH *= 1.0 - max(gl, max(band, fasc));
   sEmis += gl*vec3(0.95,0.97,1.0)*(0.02 + 0.9*uNight)*step(0.35, ih);
 }
+else if (st == 11) {
+  float tt = tudorTimber(uv, 2.75, vEave); float sxs = uv.x/0.55; float fss = fract(sxs + 0.5); float fws = fwidth(sxs);
+  float stud = (1.0 - smoothstep(0.22 - fws, 0.22 + fws, abs(fss - 0.5)*2.0))*step(0.45, uv.y)*step(uv.y, 2.75);
+  tt = max(tt, stud); col = mix(renderW(uv, vCol, 0.6, sH), vec3(0.15,0.17,0.21), tt); col = mix(col, vec3(0.19,0.2,0.23), 1.0 - step(0.45, uv.y));
+  sH += tt*0.01; sRough = mix(0.88, 0.7, tt);
+}
+else if (st == 10) {
+  vec2 ap = uv/vec2(0.9, 0.42); float arow = floor(ap.y); ap.x += mod(arow, 2.0)*0.5; vec2 af = fract(ap), aw = fwidth(ap);
+  float joint = (1.0 - smoothstep(0.0, 0.02 + aw.x, af.x)*smoothstep(0.0, 0.03 + aw.y, af.y))*clamp(1.0 - (max(aw.x, aw.y) - 0.2)*3.0, 0.0, 1.0);
+  col = vCol*(0.93 + 0.1*h21(floor(ap) + seed))*(0.9 + 0.15*fbm(vWP.xz*0.6 + vWP.y*0.4)); col = mix(col, col*0.8, joint*0.6);
+  col *= 1.0 - 0.16*smoothstep(0.55, 0.85, vnoise(vec2(uv.x*3.0, uv.y*0.3))); sRough = 0.88; sH += (1.0 - joint)*0.003;
+  float fH = 3.7, fi = floor(uv.y/fH), fy = uv.y - fi*fH, nF = max(1.0, floor((vEave - 0.4)/fH));
+  float scs = boxAA(vec2(0.0, fy), vec2(-1.0, -0.02), vec2(1.0, 0.16))*step(0.5, fi)*step(uv.y, vEave); col = mix(col, vCol*1.06, scs); sH += scs*0.02;
+  if (fNoWin < 0.5 && uv.y < vEave) {
+    float bay = 3.3, nB = floor((edgeLen - 0.8)/bay);
+    if (nB >= 1.0 && fi < nF) {
+      float margin = (edgeLen - nB*bay)*0.5, uu = uv.x - margin, bi = floor(uu/bay), bx = uu - bi*bay - bay*0.5;
+      if (uu > 0.0 && bi < nB) {
+        float ww = 0.62, y0 = 0.85, y1 = min(fH - 0.7, 3.0);
+        if (fi < 0.5 && fFront > 0.5 && abs(bi - floor(nB*0.5)) < 0.5) { y0 = 0.0; y1 = 2.9; ww = 0.75; }
+        vec2 p = vec2(bx, fy);
+        float frame = boxAA(p, vec2(-ww - 0.1, y0 - 0.1), vec2(ww + 0.1, y1 + 0.08)), win = boxAA(p, vec2(-ww, y0), vec2(ww, y1));
+        float mull = clamp((1.0 - smoothstep(0.035, 0.05, abs(p.x))) + boxAA(p, vec2(-9.0, y0 + (y1 - y0)*0.62), vec2(9.0, y0 + (y1 - y0)*0.62 + 0.07)), 0.0, 1.0);
+        float hood = clamp(boxAA(p, vec2(-ww - 0.2, y1 + 0.12), vec2(ww + 0.2, y1 + 0.26)) + boxAA(vec2(abs(p.x), p.y), vec2(ww + 0.08, y1 - 0.25), vec2(ww + 0.2, y1 + 0.26)), 0.0, 1.0);
+        col = mix(col, vCol*0.95, frame); col = mix(col, vCol*1.08, hood); sH += hood*0.03 + frame*0.01;
+        float g = win*(1.0 - mull); col = mix(col, vec3(0.07,0.08,0.09), g); col = mix(col, vec3(0.88,0.87,0.84), win*mull);
+        sH *= 1.0 - win; sRough = mix(sRough, 0.05, g); sMetal = mix(sMetal, 0.55, g);
+        sEmis += g*uNight*vec3(1.0,0.75,0.45)*1.2*step(0.5, h21(vec2(bi, fi + seed)));
+      }
+    }
+  }
+}
 else if (st == 8) { float n = fbm(vWP.xz*3.0 + vWP.y*2.0); float n2 = vnoise(vec2(uv.x, uv.y)*14.0); col = vCol*(0.55+0.7*n)*(0.8+0.3*n2); sH += (n*0.08+n2*0.03); sRough = 1.0; }
+if (fPlinth > 0.5) col = mix(col, vec3(0.025), 1.0 - smoothstep(0.42, 0.46, uv.y));
 if (st <= 5) {
   col *= mix(0.72, 1.0, smoothstep(0.0, 0.8, uv.y));
   float ed = vEave - uv.y; if (ed > -0.02) col *= mix(0.7, 1.0, smoothstep(0.0, 0.5, ed));
 }
 /* windows, doors, shopfronts */
-if (fNoWin < 0.5 && st <= 5) {
+if (fNoWin < 0.5 && (st <= 5 || st == 11)) {
   bool church = st == 4;
   float bay = church ? 4.2 : (2.5 + h21(vec2(seed, 1.7))*1.1);
   float nB = floor((edgeLen - 0.7) / bay);
@@ -766,13 +801,13 @@ if (fNoWin < 0.5 && st <= 5) {
             sill = boxAA(p, vec2(-ww*0.5-0.07, sy-0.09), vec2(ww*0.5+0.07, sy));
             float gb = (1.0 - boxAA(vec2(abs(p.x), p.y), vec2(0.022, -9.0), vec2(9.0, 9.0))) + boxAA(p, vec2(-9.0, sy+wh*0.62-0.02), vec2(9.0, sy+wh*0.62+0.02));
             win *= 1.0 - clamp(gb, 0.0, 1.0)*0.95;
-            lp = p; lead = st == 3 ? 1.0 : 0.0;
+            lp = p; lead = (st == 3 || st == 11) ? 1.0 : 0.0;
           }
         }
       }
       sH *= 1.0 - clamp(max(max(win, shopGl), max(door, frame)), 0.0, 1.0);
       float wid = h21(vec2(bi + seed*13.0, fi + 3.0)); float lit = step(0.52, h21(vec2(bi*1.3 + seed*7.0, fi*2.1)));
-      vec3 frameCol = fPub > 0.5 && fi < 0.5 ? pubCol : (st == 3) ? vec3(0.05,0.04,0.035) : vec3(0.86,0.85,0.82);
+      vec3 frameCol = fPub > 0.5 && fi < 0.5 ? pubCol : (st == 3 || st == 11) ? vec3(0.06,0.07,0.09) : vec3(0.86,0.85,0.82);
       col = mix(col, frameCol, frame); sRough = mix(sRough, 0.5, frame); sH += frame*0.012;
       col = mix(col, vec3(0.62,0.6,0.56), sill); sH += sill*0.025;
       if (win > 0.0) {
@@ -829,6 +864,7 @@ vec2 uv = vUvM; int t = int(vInfo.x + 0.5); float seed = vInfo.y;
 float sH = 0.0, sRough = 0.8, sMetal = 0.0; vec3 sEmis = vec3(0.0); vec3 col = vCol;
 if (t == 2) { float n = vnoise(uv*25.0), n2 = fbm(uv*0.8); col = vCol*(0.8+0.25*n)*(0.85+0.3*n2); sH = n*0.004; sRough = 0.95;
   if (vInfo.z > 0.5) { vec2 pp = uv/vec2(1.05, 1.75); vec2 pf = fract(pp); float pan = step(0.05, pf.x)*step(pf.x, 0.95)*step(0.04, pf.y)*step(pf.y, 0.96)*step(0.42, fbm(floor(pp)*0.12 + seed*9.0)); col = mix(col, vec3(0.02,0.035,0.07)*(0.8+0.4*h21(floor(pp))), pan); sRough = mix(sRough, 0.15, pan); sMetal = mix(sMetal, 0.5, pan); sH *= 1.0 - pan; } }
+else if (t == 5) { float cu = uv.x/0.19; float fwc = fwidth(cu); float fade = clamp(1.0-(fwc-0.25)*3.0, 0.0, 1.0); float sn = sin(cu*6.2832); col = vCol*(0.9 + 0.13*sn*fade)*(0.9+0.14*fbm(vWP.xz*0.25 + seed)); col = mix(col, col*vec3(0.85,0.8,0.7), smoothstep(0.6, 0.9, fbm(vWP.xz*0.08))*0.5); sH = sn*0.012*fade; sRough = 0.48; sMetal = 0.3; }
 else if (t == 4) { vec2 bp = uv/vec2(0.55, 0.32); float row = floor(bp.y); bp.x += mod(row, 2.0)*0.5; vec2 cell = floor(bp), f = fract(bp), fw = fwidth(bp); float mo = 1.0 - smoothstep(0.03, 0.06+fw.x, f.x)*smoothstep(0.05, 0.09+fw.y, f.y); col = vCol*(0.82+0.3*h21(cell))*(0.88+0.18*fbm(vWP.xz*0.8 + vWP.y*0.5)); col = mix(col, col*0.75, mo); col = mix(col, vec3(0.32,0.34,0.26), smoothstep(0.6, 0.8, fbm(vWP.xz*1.5 + vWP.y))*0.3); sH = (1.0-mo)*0.01; sRough = 0.9; }
 else {
   vec2 sz = t == 1 ? vec2(0.3, 0.2) : vec2(0.165, 0.1);
@@ -962,7 +998,15 @@ function buildingStyle(b, ctx, rnd) {
     if (y < 1980) return x < 0.6 ? FINISH.modernBrick : FINISH.stockBrick;
     return x < 0.75 ? FINISH.modernBrick : FINISH.render; };
   const eraRoof = y => { const x = rnd(); if (y == null) return x < 0.6 ? ROOFS.tile : x < 0.85 ? ROOFS.brown : ROOFS.slate; if (y < 1837) return ROOFS.old; if (y < 1919) return x < 0.6 ? ROOFS.slate : ROOFS.tile; if (y < 1945) return x < 0.7 ? ROOFS.tile : ROOFS.brown; if (y < 1980) return x < 0.6 ? ROOFS.concrete : ROOFS.brown; return ROOFS.tile; };
-  if (b.hero === 'library1962') { f = [9, [0.56, 0.38, 0.24]]; rf = [1, [0.42, 0.43, 0.43]]; kind = 'big'; fixed = true; }
+  if (b.hero === 'pub:redlion') { f = [1, [0.9, 0.9, 0.88]]; rf = [3, [0.28, 0.24, 0.2]]; kind = 'historic'; fixed = true; }
+  else if (b.hero === 'pub:harrow') { f = [11, [0.56, 0.61, 0.65]]; rf = [0, [0.3, 0.17, 0.11]]; kind = 'historic'; fixed = true; }
+  else if (b.hero === 'pub:pow') { f = [1, [0.8, 0.7, 0.47]]; rf = [1, [0.24, 0.25, 0.28]]; kind = 'res'; fixed = true; }
+  else if (b.hero === 'whitehall') { f = [2, [0.93, 0.93, 0.9]]; rf = [3, [0.34, 0.21, 0.15]]; kind = 'historic'; fixed = true; }
+  else if (b.hero === 'lumley') { f = [4, [0.6, 0.58, 0.53]]; rf = [3, [0.47, 0.25, 0.18]]; kind = 'church'; fixed = true; }
+  else if (b.hero === 'ph:white' || b.hero === 'ph:conserv' || b.hero === 'ph:stationway') { f = [1, [0.93, 0.92, 0.9]]; rf = [1, b.hero === 'ph:white' ? [0.34, 0.35, 0.37] : [0.27, 0.28, 0.31]]; kind = 'res'; fixed = true; }
+  else if (b.hero === 'station') { f = [0, [0.52, 0.22, 0.13]]; rf = [0, [0.66, 0.27, 0.14]]; kind = 'historic'; fixed = true; }
+  else if (b.hero === 'mansion') { f = [10, [0.64, 0.5, 0.31]]; rf = [1, [0.27, 0.28, 0.3]]; kind = 'historic'; fixed = true; }
+  else if (b.hero === 'library1962') { f = [9, [0.56, 0.38, 0.24]]; rf = [1, [0.42, 0.43, 0.43]]; kind = 'big'; fixed = true; }
   else if (ctx.weatherIds.has(b.id) || /whitehall|old farmhouse|farm house|cottage/i.test(nm)) { f = FINISH.weather; rf = ROOFS.old; kind = 'historic'; fixed = true; }
   else if (/church|chapel|cathedral/.test(type) || T.amenity === 'place_of_worship' || /church|chapel/i.test(nm)) { kind = 'church'; const lum = /lumley/i.test(nm); f = lum ? [1, [0.66, 0.64, 0.6]] : FINISH.stone; rf = lum ? ROOFS.tile : ROOFS.slate; fixed = true; }
   else if (/garage|shed|carport/.test(type) || (A < 30 && !T['building:levels'] && !b.shop)) { kind = 'garage'; f = rnd() < 0.5 ? FINISH.redBrick : [1, [0.8, 0.79, 0.75]]; rf = ROOFS.flat; flags |= /garage/.test(type) ? 8 : 2; }
@@ -1049,8 +1093,10 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
         const a = ring[i], q = ring[(i + 1) % ring.length]; let fl = S.flags;
         if (ri === 0 && S.kind === 'shop') { const L = Math.hypot(q[0] - a[0], q[1] - a[1]); if (L > 2) { const mx = (a[0] + q[0]) / 2 + (q[1] - a[1]) / L * 5, mz = (a[1] + q[1]) / 2 - (q[0] - a[0]) / L * 5; if (ctx.majorDist(mx, mz) < 15 || ctx.roadDist(mx, mz) < 9) fl |= 1; } }
         if (ri === 0 && i === frontEdge && frontD < 25) fl |= 4;
-        if (ri === 0 && b.signEdges && b.signEdges.has(i)) fl |= 17;
-        if (ri === 0 && b.pubEdges && b.pubEdges.has(i)) fl |= 32;
+        const ownFront = /^pub:(redlion|harrow)$/.test(b.hero || '');
+        if (ri === 0 && !ownFront && b.signEdges && b.signEdges.has(i)) fl |= 17;
+        if (ri === 0 && !ownFront && b.pubEdges && b.pubEdges.has(i)) fl |= 32;
+        if (b.hero === 'pub:redlion' || b.hero === 'whitehall') fl |= 64;
         if (ri > 0) fl |= 0;
         wallQuad(GW, a, q, wallBottom, wallBottom, top, top, base, [S.style, seed, null, fl], S.col, eave);
       }
@@ -1060,20 +1106,42 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
     const flat = ridge - eave < 1.0 || S.roof === 2;
     const ob = obb(outer);
     const rectFill = ob ? A / (4 * ob.hl * ob.hw) : 0;
-    let chimney = null;
+    let chimney = null, rk = 'skel';
     if (flat) {
+      rk = 'flat';
       const y = flat && S.roof !== 2 ? top : top;
       const contour = outer.map(p => new THREE.Vector2(p[0], p[1])), holes = b.holes.map(h => h.map(p => new THREE.Vector2(p[0], p[1])));
       const tris = THREE.ShapeUtils.triangulateShape(contour, holes); const all = [...outer, ...b.holes.flat()];
-      for (const t of tris) roofTri(GR, [all[t[0]][0], y, all[t[0]][1]], [all[t[1]][0], y, all[t[1]][1]], [all[t[2]][0], y, all[t[2]][1]], [2, seed, S.kind !== 'garage' && A > 150 && rnd() < 0.35 ? 1 : 0, 0], S.kind === 'garage' || A < 150 ? C(0.15, 0.15, 0.16) : C(0.46, 0.46, 0.44));
+      for (const t of tris) roofTri(GR, [all[t[0]][0], y, all[t[0]][1]], [all[t[1]][0], y, all[t[1]][1]], [all[t[2]][0], y, all[t[2]][1]], ...(/historic|church/.test(S.kind) || b.listed ? [[S.roof === 2 ? 1 : S.roof, seed, 0, 0], S.roof === 2 ? C(0.27, 0.28, 0.3) : S.roofCol] : [[2, seed, S.kind !== 'garage' && A > 150 && rnd() < 0.35 ? 1 : 0, 0], S.kind === 'garage' || A < 150 ? C(0.15, 0.15, 0.16) : C(0.46, 0.46, 0.44)]));
       if (A > 40) rings.forEach(ring => { for (let i = 0; i < ring.length; i++) { const a = ring[i], q = ring[(i + 1) % ring.length]; wallQuad(GW, a, q, top, top, top + 0.4, top + 0.4, base, [S.style, seed, null, 2], S.col, eave + 0.4); wallQuad(GW, q, a, top, top, top + 0.4, top + 0.4, base, [S.style, seed, null, 2], S.col, eave + 0.4); } });
-    } else if (ob && rectFill > 0.86 && outer.length <= 10 && ob.hw > 1.2) {
-      const gable = S.kind === 'historic' || S.kind === 'shop' || S.kind === 'church' || shape === 'gabled' || (shape !== 'hipped' && rnd() < (S.style === 5 ? 0.25 : 0.45));
+    } else if (ob && rectFill > (/^(whitehall|lumley|ph:)/.test(b.hero || '') ? 0.72 : 0.86) && b.hero !== 'mansion' && (outer.length <= 10 || /^(whitehall|lumley|ph:)/.test(b.hero || '')) && ob.hw > 1.2) {
+      const gable = /^(pub:pow|station|ph:)/.test(b.hero || '') ? false : /^(whitehall|lumley)$/.test(b.hero || '') ? true : S.kind === 'historic' || S.kind === 'shop' || S.kind === 'church' || shape === 'gabled' || (shape !== 'hipped' && rnd() < (S.style === 5 ? 0.25 : 0.45));
+      rk = gable ? 'gable' : 'hip';
       const hw = ob.hw, hl = ob.hl, o = 0.32, g = 0.22, slope = (ridge - eave) / hw;
       const ye = top - o * slope, yr = base + ridge;
       const P = (u, v, y) => { const q = OB(ob, u, v); return [q[0], y, q[1]]; };
       const frontGables = () => {
-        if (S.kind !== 'shop' || 2 * hl < 10 || ridge - eave < 1.6) return;
+        const HF = HERO_FRONT[b.hero];
+        if (HF) {
+          const F = streetFace(ob, ctx.roadDist), { nF, Ax, dep, half, side, O2 } = F, Q = (a, f, y) => { const p = O2(a, f); return [p[0], y, p[1]]; }, nn = [nF[0], 0, nF[1]];
+          if (side) for (const gs of HF.gables) {
+            const gw = Math.min(gs.w, half * 0.8), gh = Math.min(gw * 0.72, 3.6, (ridge - eave) * 0.92), dv = Math.min(dep * 0.9, gh / Math.max(slope, 0.3)), o2 = 0.3, s2 = gh / (gw / 2), info = [S.style, seed, gw, 2], uk = gs.u * half, fz = dep + (gs.proj || 0);
+            if (gs.proj) boxWalls(GW, ...O2(uk, dep + gs.proj / 2 - 0.05), Ax, gw / 2, gs.proj / 2 + 0.05, base - 0.5, top, [S.style, seed, null, 0], S.col, base);
+            wallTri(GW, Q(uk - gw / 2, fz + 0.12, top), Q(uk + gw / 2, fz + 0.12, top), Q(uk, fz + 0.12, top + gh), nn, base, info, S.col, eave, O2(uk - gw / 2, fz + 0.12), Ax);
+            const Rf = Q(uk, fz + 0.45, top + gh + 0.06), Rb = Q(uk, dep - dv, top + gh + 0.06);
+            roofQuad(GR, Q(uk - gw / 2 - o2, fz + 0.45, top - o2 * s2), Rf, Rb, Q(uk - gw / 2 - o2, dep - dv, top - o2 * s2), rinfo, S.roofCol);
+            roofQuad(GR, Q(uk + gw / 2 + o2, fz + 0.45, top - o2 * s2), Rf, Rb, Q(uk + gw / 2 + o2, dep - dv, top - o2 * s2), rinfo, S.roofCol);
+          }
+          if (HF.porch) {
+            const up = half * (side ? HF.porch.u : HF.porch.ue), pc = O2(up, dep + 0.7), y2 = base + 2.9; b.porch = pc;
+            boxWalls(GW, pc[0], pc[1], Ax, 1.05, 0.7, base - 0.5, y2, [S.style, seed, 2.1, 2], S.col, base);
+            roofQuad(GR, Q(up - 1.25, dep, y2 - 0.1), Q(up - 1.25, dep + 1.55, y2 - 0.1), Q(up, dep + 1.55, y2 + 1.05), Q(up, dep, y2 + 1.05), rinfo, S.roofCol);
+            roofQuad(GR, Q(up + 1.25, dep, y2 - 0.1), Q(up + 1.25, dep + 1.55, y2 - 0.1), Q(up, dep + 1.55, y2 + 1.05), Q(up, dep, y2 + 1.05), rinfo, S.roofCol);
+            wallTri(GW, Q(up - 1.05, dep + 1.4, y2), Q(up + 1.05, dep + 1.4, y2), Q(up, dep + 1.4, y2 + 0.95), nn, base, [S.style, seed, 2.1, 2], S.col, 2.0, O2(up - 1.05, dep + 1.4), Ax);
+          }
+          return;
+        }
+        if (S.kind !== 'shop' || b.hero || 2 * hl < 10 || ridge - eave < 1.6) return;
         const sgn = ctx.roadDist(...OB(ob, 0, hw + 4)) <= ctx.roadDist(...OB(ob, 0, -hw - 4)) ? 1 : -1, F = v => sgn * v;
         const gh = Math.min(2.4, (ridge - eave) * 0.85), gw = 3.4, dv = gh / slope, n = Math.max(1, Math.floor((2 * hl - 2) / 6.5)), o2 = 0.25, s2 = gh / (gw / 2), gcol = S.style === 3 ? S.col : C(0.88, 0.86, 0.8);
         for (let k = 0; k < n; k++) {
@@ -1102,8 +1170,9 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
         frontGables(false);
         chimney = { u: rl > 0.8 ? (rnd() < 0.5 ? -1 : 1) * rl * 0.85 : 0, yr };
       }
-      if (chimney && (S.kind === 'res' || S.kind === 'historic') && rnd() < 0.8) {
-        const cq = OB(ob, chimney.u, 0), y1 = chimney.yr + 0.9, ci = [0, seed, null, 2], cc = S.kind === 'historic' ? C(0.45, 0.22, 0.14) : (S.style === 0 ? S.col : C(0.48, 0.24, 0.15));
+      const HC = chimney && HERO_CHIM[b.hero] ? HERO_CHIM[b.hero](ob.hl) : null;
+      if (chimney && (HC || ((S.kind === 'res' || S.kind === 'historic') && rnd() < 0.8))) for (const cu of HC ? HC.us : [chimney.u]) {
+        const cq = OB(ob, cu, 0), y1 = chimney.yr - Math.max(0, Math.abs(cu) - (gable ? hl : Math.max(0, hl - hw))) * slope + 0.9 + (HC ? HC.extra : 0), ci = [0, seed, null, 2], cc = HC && HC.col ? HC.col : S.kind === 'historic' ? C(0.45, 0.22, 0.14) : (S.style === 0 ? S.col : C(0.48, 0.24, 0.15));
         const U = ob.U, V = ob.V, hu = 0.5, hv = 0.32;
         const cr = [[-hu, -hv], [hu, -hv], [hu, hv], [-hu, hv]].map(([u, v]) => [cq[0] + U[0] * u + V[0] * v, cq[1] + U[1] * u + V[1] * v]);
         const ccw = ringArea(cr) > 0 ? cr : cr.slice().reverse();
@@ -1127,7 +1196,8 @@ function buildBuildings(W, terr, dtm, dsm, ctx, onProgress) {
       for (let k = 0; k < 8; k++) roofTri(GR, oct[k], oct[(k + 1) % 8], apex, [4, seed, 0, 0], SC);
       for (let j = 0; j < 4; j++) { const a = Math.PI / 4 + j * Math.PI / 2, u = Math.cos(a) * ts * Math.SQRT2, v = Math.sin(a) * ts * Math.SQRT2; const Cn = [tp[0] + U[0] * u + V[0] * v, yb, tp[1] + U[1] * u + V[1] * v]; const A1 = oct[(2 * j) % 8], B1 = oct[(2 * j + 1) % 8]; const mid = [(A1[0] + B1[0]) / 2, yb, (A1[2] + B1[2]) / 2]; const D = [lerp(mid[0], apex[0], 0.22), lerp(yb, apex[1], 0.22), lerp(mid[2], apex[2], 0.22)]; roofTri(GR, Cn, A1, D, [4, seed, 0, 0], SC); roofTri(GR, Cn, D, B1, [4, seed, 0, 0], SC); }
     }
-    out.push({ id: b.id, outer, holes: b.holes, base, eave, ridge, src, kind: S.kind, c, w0, w1: GW.p.length / 3, r0, r1: GR.p.length / 3, tags: b.tags, os: b.os, listed: b.listed, S });
+    if (b.hero === 'mansion') mansionDetails(GW, GR, outer, b.holes, base, eave, ridge, S.col, seed, rnd);
+    out.push({ id: b.id, hero: b.hero, rk, ob, outer, holes: b.holes, base, eave, ridge, src, kind: S.kind, c, w0, w1: GW.p.length / 3, r0, r1: GR.p.length / 3, tags: b.tags, os: b.os, listed: b.listed, S });
     if (done % 200 === 0 && onProgress) onProgress(done / W.buildings.length);
   }
   return { walls: GW.build(), roofs: GR.build(), list: out };
@@ -1516,6 +1586,7 @@ const SIGN_PAL = {
 };
 const lumOf = hex => { const c = new THREE.Color(hex); return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; };
 function signStyle(p) {
+  if (p.host && p.host.hero === 'pub:harrow' && !overrides.s[p.name]) return { bg: '#f1f1ec', fg: '#141414', font: 'Georgia, "Times New Roman", serif', weight: 700, upper: true, line: 'rgba(0,0,0,.25)' };
   const P = SIGN_PAL[p.kind] || SIGN_PAL.shop, ov = overrides.s[p.name] || {}, h = hash2(strHash(p.name), 7);
   const bg = ov.bg || P.bg[Math.floor(h * P.bg.length)];
   const light = lumOf(bg) > 0.3;
@@ -1577,6 +1648,9 @@ function buildSigns(pois, blist) {
     const Pt = (s, y, o) => [a[0] + d[0] * s + n[0] * o, y, a[1] + d[1] * s + n[1] * o];
     p.cx = a[0] + d[0] * p.c + n[0] * 0.2; p.cz = a[1] + d[1] * p.c + n[1] * 0.2; p.n = n;
     /* fascia board */
+    const hero = p.host.hero || '';
+    if (hero === 'pub:redlion' || hero === 'pub:pow') return;
+    if (hero === 'pub:harrow') { p.w = Math.min(3.4, L * 0.3); const r0 = p.host.outer, e0 = r0[p.edge], e1 = r0[(p.edge + 1) % r0.length], at = t => [e0[0] + (e1[0] - e0[0]) * t, e0[1] + (e1[1] - e0[1]) * t], pc = p.host.porch, far = t => pc ? Math.hypot(at(t)[0] - pc[0], at(t)[1] - pc[1]) : t; p.c = clamp(L * (far(0.8) > far(0.2) ? 0.8 : 0.2), p.w / 2 + 0.2, L - p.w / 2 - 0.2); }
     const st = signStyle(p), col = i % cols, row = (i / cols) | 0, x0 = col * cw, y0 = row * ch;
     drawFascia(fg, x0, y0, cw, ch, p, st, BOARD);
     const W2 = fcv.width, H2 = fcv.height, u0 = (x0 + 1) / W2, u1 = (x0 + cw - 1) / W2, v0 = (y0 + 1) / H2, v1 = (y0 + ch - 1) / H2, ub = (x0 + 3) / W2, vb = (y0 + 3) / H2;
@@ -1584,7 +1658,7 @@ function buildSigns(pois, blist) {
     pushBox(SP, SN, SU, Pt(p.c, (y0b + y1b) / 2, 0.075), D3, UP, N3, p.w / 2, BOARD / 2, 0.045, k => k === 'c+' ? [[u1, v1], [u1, v0], [u0, v1], [u0, v0]] : [[ub, vb], [ub, vb], [ub, vb], [ub, vb]]);
     const h = hash2(strHash(p.name), 3);
     /* pubs: hanging sign, baskets */
-    if (p.kind === 'pub') {
+    if (p.kind === 'pub' && !hero) {
       const k = pubs.indexOf(p), bx = (k % pcols) * PW, by = ((k / pcols) | 0) * PH; drawPubBoard(pg, bx, by, PW, PH, p.name, st.bg);
       let sh = p.c + p.w / 2 + 0.8; if (sh > L - 0.5) sh = p.c - p.w / 2 - 0.8; if (sh < 0.5) sh = p.c;
       const yb = base + 3.85;
@@ -1804,30 +1878,35 @@ function buildRailway(W, terr, collide, station, wallMat, roofMat, propMat) {
   const group = new THREE.Group(), RA = [], SL = [];
   for (const r of W.roads) { const t = r.tags; if (t.railway !== 'rail' || t.tunnel === 'yes' || r.pts.length < 2) continue; ribbonAt(SL, r.pts, 0, 2.5, 0.24, 0.41, 0.09, terr); for (const s of [-0.7175, 0.7175]) ribbonAt(RA, r.pts, s, 0.075, 1e6, 0, 0.19, terr); }
   if (SL.length) group.add(flatMesh(SL, 0x5e5a55, 0.95)); if (RA.length) group.add(flatMesh(RA, 0x8b8782, 0.35, 0.8));
-  const plats = [];
-  for (const a of W.areas) if (a.tags.railway === 'platform' || (a.tags.public_transport === 'platform' && a.tags.train === 'yes')) plats.push(a.outer.slice());
-  for (const r of W.roads) if (r.tags.railway === 'platform' && !near(r.pts[0], r.pts[r.pts.length - 1])) plats.push(bufferLine(r.pts, parseFloat(r.tags.width) || 3.2));
+  const plats = platformRings(W), railD = railDistFn(W), sb = W.buildings.find(b => b.hero === 'station'), sbc = sb ? centroid(sb.outer) : station;
   const GWp = new GB(), GRp = new GB(), parts = [];
-  for (let ring of plats) {
-    if (ringArea(ring) < 0) ring = ring.slice().reverse(); if (Math.abs(ringArea(ring)) < 20) continue;
+  const nearPlat = plats.length ? plats.reduce((a, r) => ringsDist(sbc[0], sbc[1], [r]) < ringsDist(sbc[0], sbc[1], [a]) ? r : a, plats[0]) : null;
+  for (const ring of plats) {
     let mx = -Infinity; for (const p of ring) mx = Math.max(mx, terr(p[0], p[1])); const top = mx + 0.95, bot = mx - 1.5;
     for (let i = 0; i < ring.length; i++) { const a = ring[i], q = ring[(i + 1) % ring.length]; wallQuad(GWp, a, q, bot, bot, top, top, bot, [0, 0.3, null, 2], C(0.42, 0.24, 0.17), 99); collide.add(a[0], a[1], q[0], q[1], { a, b: q, r: 0 }); }
     const tris = THREE.ShapeUtils.triangulateShape(ring.map(p => new THREE.Vector2(p[0], p[1])), []);
     for (const t of tris) roofTri(GRp, [ring[t[0]][0], top, ring[t[0]][1]], [ring[t[1]][0], top, ring[t[1]][1]], [ring[t[2]][0], top, ring[t[2]][1]], [2, 0.2, 0, 0], C(0.33, 0.33, 0.31));
     const ob = obb(ring); if (!ob || !station) continue;
     if (Math.hypot(ob.cx - station[0], ob.cz - station[1]) > 160) continue;
-    const su = clamp((station[0] - ob.cx) * ob.U[0] + (station[1] - ob.cz) * ob.U[1], -ob.hl + 30, ob.hl - 30), len = Math.min(2 * ob.hl - 6, 70), cw = Math.max(2.2, ob.hw * 1.5);
-    const cc = OB(ob, su, 0); placeBox(parts, cc, ob.U, len, cw, 0.14, top + 3.25, 0xbfc4c6); placeBox(parts, OB(ob, su, cw / 2), ob.U, len, 0.05, 0.4, top + 3.0, 0xe9e9e4); placeBox(parts, OB(ob, su, -cw / 2), ob.U, len, 0.05, 0.4, top + 3.0, 0xe9e9e4);
-    for (let u = su - len / 2 + 3; u <= su + len / 2 - 3; u += 6) { const p = OB(ob, u, 0); placeBox(parts, p, ob.U, 0.16, 0.16, 3.25, top, 0x2f4136); collide.add(p[0], p[1], p[0], p[1], { a: p, b: p, r: 0.12 }); }
+    const s = railD(...OB(ob, 0, ob.hw + 2)) < railD(...OB(ob, 0, -ob.hw - 2)) ? 1 : -1, home = ring === nearPlat;
+    const backCol = home ? C(0.78, 0.77, 0.7) : C(0.33, 0.39, 0.47), frontCol = C(0.86, 0.86, 0.8);
+    /* OSM canopies over this platform take precedence for extent */
+    const own = (W.canopies || []).filter(cn => { if (cn.used) return false; const c = centroid(cn.outer); return inRing(c[0], c[1], ring) || ringsDist(c[0], c[1], [ring]) < 3; });
+    if (own.length) for (const cn of own) { cn.used = true; const o2 = obb(cn.outer); if (!o2) continue; const pu = (o2.cx - ob.cx) * ob.U[0] + (o2.cz - ob.cz) * ob.U[1]; const L2 = Math.abs(o2.U[0] * ob.U[0] + o2.U[1] * ob.U[1]) > 0.7 ? 2 * o2.hl : 2 * o2.hw; stationCanopy(GRp, parts, collide, ob, pu, L2, Math.max(2.4, Math.min(2 * ob.hw - 0.3, 7)), top + 3.6, s, backCol, frontCol); }
+    else {
+      const su0 = (sbc[0] - ob.cx) * ob.U[0] + (sbc[1] - ob.cz) * ob.U[1], len = Math.min(2 * ob.hl - 6, home ? 80 : 95), su = clamp(home ? su0 + Math.sign(-su0 || 1) * len * 0.3 : su0, -ob.hl + len / 2 + 2, ob.hl - len / 2 - 2);
+      stationCanopy(GRp, parts, collide, ob, su, len, Math.max(2.4, Math.min(2 * ob.hw - 0.3, 7)), top + 3.6, s, backCol, frontCol);
+    }
   }
   if (GWp.p.length) { const m = new THREE.Mesh(GWp.build(), wallMat); m.castShadow = m.receiveShadow = true; group.add(m); }
-  if (GRp.p.length) { const m = new THREE.Mesh(GRp.build(), roofMat); m.receiveShadow = true; group.add(m); }
+  if (GRp.p.length) { const m = new THREE.Mesh(GRp.build(), roofMat); m.castShadow = m.receiveShadow = true; group.add(m); }
   if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), propMat); m.castShadow = m.receiveShadow = true; group.add(m); }
   return group;
 }
 function buildCanopies(W, terr, dtm, dsm, collide, wallMat, roofMat, propMat) {
   const group = new THREE.Group(), GWc = new GB(), GRc = new GB(), parts = [];
   for (const cn of W.canopies) {
+    if (cn.used) continue;
     let ring = cn.outer; if (ring.length < 3) continue; if (ringArea(ring) < 0) ring = ring.slice().reverse(); const A = Math.abs(ringArea(ring)); if (A < 8 || A > 3000) continue;
     const c = centroid(ring); let g0 = Infinity; for (const p of ring) g0 = Math.min(g0, terr(p[0], p[1]));
     let top = parseFloat(cn.tags.height) || 0;
@@ -1842,6 +1921,277 @@ function buildCanopies(W, terr, dtm, dsm, collide, wallMat, roofMat, propMat) {
   if (GWc.p.length) { const m = new THREE.Mesh(GWc.build(), wallMat); m.castShadow = m.receiveShadow = true; group.add(m); }
   if (GRc.p.length) { const m = new THREE.Mesh(GRc.build(), roofMat); m.castShadow = m.receiveShadow = true; group.add(m); }
   if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), propMat); m.castShadow = m.receiveShadow = true; group.add(m); }
+  return group;
+}
+
+/* Cheam station: red-brick booking hall with hipped clay-tile roofs, long ridged platform canopies */
+function stationPoint(W) { const stP = W.points.find(p => p.tags.railway === 'station' || (p.tags.public_transport === 'station' && p.tags.train !== 'no')); return stP ? [stP.x, stP.z] : ll2xz(-0.2147, 51.356); }
+function platformRings(W) {
+  const plats = [];
+  for (const a of W.areas) if (a.tags.railway === 'platform' || (a.tags.public_transport === 'platform' && a.tags.train === 'yes')) plats.push(a.outer.slice());
+  for (const r of W.roads) if (r.tags.railway === 'platform' && !near(r.pts[0], r.pts[r.pts.length - 1])) plats.push(bufferLine(r.pts, parseFloat(r.tags.width) || 3.2));
+  return plats.map(r => ringArea(r) < 0 ? r.slice().reverse() : r).filter(r => Math.abs(ringArea(r)) >= 20);
+}
+function markStation(W, st) {
+  if (!st || Math.abs(st[0]) > HALF - 20 || Math.abs(st[1]) > HALF - 20) return null;
+  const plats = platformRings(W); let best = null, bs = 1e9;
+  for (const b of W.buildings) {
+    if (Math.abs(b.outer[0][0] - st[0]) > 150 || Math.abs(b.outer[0][1] - st[1]) > 150) continue;
+    const A = Math.abs(ringArea(b.outer)); if (A < 40 || A > 1500) continue;
+    const t = b.tags, c = centroid(b.outer), named = t.building === 'train_station' || t.railway === 'station' || /station/i.test(t.name || '');
+    const dp = plats.length ? Math.min(...plats.map(r => ringsDist(c[0], c[1], [r]))) : 0;
+    if (!named && dp > 14) continue;
+    const sc = Math.hypot(c[0] - st[0], c[1] - st[1]) + (named ? -60 : 0) + dp; if (sc < bs) { bs = sc; best = b; }
+  }
+  if (best && bs < 90) { best.hero = 'station'; return best; }
+  return null;
+}
+function railDistFn(W) { const segs = []; for (const r of W.roads) if (r.tags.railway === 'rail') for (let i = 1; i < r.pts.length; i++) segs.push([r.pts[i - 1], r.pts[i]]); return (x, z) => { let d = 1e9; for (const [a, b] of segs) d = Math.min(d, segDist(x, z, a[0], a[1], b[0], b[1])[0]); return d; }; }
+/* one platform canopy: a low back slope (membrane) up to a ridge, and a ridged steel sheet falling to the track edge with a white valance */
+function stationCanopy(GR, parts, collide, ob, su, len, cw, y, s, backCol, frontCol) {
+  const R3 = (u, v, h) => { const p = OB(ob, u, v); return [p[0], h, p[1]]; }, u0 = su - len / 2, u1 = su + len / 2, vb = -s * cw / 2, vr = -s * cw * 0.12, vf = s * cw / 2, yr = y + 0.55;
+  roofQuad(GR, R3(u0, vb, y + 0.3), R3(u1, vb, y + 0.3), R3(u1, vr, yr), R3(u0, vr, yr), [2, 0.37, 0, 0], backCol);
+  roofQuad(GR, R3(u0, vr, yr), R3(u1, vr, yr), R3(u1, vf, y), R3(u0, vf, y), [5, 0.61, 0, 0], frontCol);
+  placeBox(parts, OB(ob, su, vf + s * 0.03), ob.U, len, 0.05, 0.45, y - 0.42, 0xecebe4);
+  placeBox(parts, OB(ob, su, vb - s * 0.03), ob.U, len, 0.05, 0.3, y - 0.05, 0xdedcd4);
+  for (let u = u0 + 2; u <= u1 - 2; u += 6) { const p = OB(ob, u, -s * cw * 0.15); placeBox(parts, p, ob.U, 0.16, 0.16, 3.65, y - 3.65, 0x2f4136); placeBox(parts, OB(ob, u, 0), ob.U, 0.1, cw * 0.95, 0.18, y - 0.22, 0x2f4136); collide.add(p[0], p[1], p[0], p[1], { a: p, b: p, r: 0.12 }); }
+}
+
+/* Nonsuch Mansion (Nonsuch Park House): Tudor Gothic, rebuilt by Jeffry Wyatville 1802–06 */
+const MANSION_EN = [523426, 163611];   // Historic England list entry 1378198
+function findMansion(W, nhle) {
+  const ref = [MANSION_EN[0] - OE, ON - MANSION_EN[1]];
+  const h = nhle.find(L => /NONSUCH PARK HOUSE|NONSUCH MANSION/i.test(L.name)); const p = h ? [h.x, h.z] : ref;
+  if (Math.abs(p[0]) > HALF - 30 || Math.abs(p[1]) > HALF - 30) return null;
+  return p;
+}
+function markMansion(W, pos) {
+  if (!pos) return null; let main = null, bd = 30;
+  for (const b of W.buildings) { if (Math.abs(b.outer[0][0] - pos[0]) > 120 || Math.abs(b.outer[0][1] - pos[1]) > 120) continue; if (inPoly(pos[0], pos[1], b.outer, b.holes)) { main = b; bd = 0; break; } const d = ringsDist(pos[0], pos[1], [b.outer]); if (d < bd) { bd = d; main = b; } }
+  if (!main) return null; main.hero = 'mansion';
+  for (const b of W.buildings) if (b !== main && Math.abs(b.outer[0][0] - pos[0]) < 120 && Math.abs(b.outer[0][1] - pos[1]) < 120 && b.outer.some(p => ringsDist(p[0], p[1], [main.outer]) < 1.5)) b.hero = 'mansion';
+  return main;
+}
+function boxWalls(G, cx, cz, U, hu, hv, y0, y1, info, col, base) {
+  const V = [-U[1], U[0]], cr = [[-hu, -hv], [hu, -hv], [hu, hv], [-hu, hv]].map(([u, v]) => [cx + U[0] * u + V[0] * v, cz + U[1] * u + V[1] * v]);
+  const r = ringArea(cr) > 0 ? cr : cr.slice().reverse();
+  for (let i = 0; i < 4; i++) wallQuad(G, r[i], r[(i + 1) % 4], y0, y0, y1, y1, base, info, col, 99);
+  wallTri(G, [r[0][0], y1, r[0][1]], [r[1][0], y1, r[1][1]], [r[2][0], y1, r[2][1]], [0, 1, 0], base, info, col, 99, [0, 0], [1, 0]);
+  wallTri(G, [r[0][0], y1, r[0][1]], [r[2][0], y1, r[2][1]], [r[3][0], y1, r[3][1]], [0, 1, 0], base, info, col, 99, [0, 0], [1, 0]);
+}
+function mansionDetails(GW, GR, outer, holes, base, eave, ridge, col, seed, rnd) {
+  const top = base + eave, pin = [10, seed, null, 2], brick = [0, seed, null, 2], BR = C(0.42, 0.2, 0.13), STONE = C(0.6, 0.53, 0.4);
+  const n = outer.length;
+  for (let i = 0; i < n; i++) {
+    const a = outer[i], q = outer[(i + 1) % n], L = Math.hypot(q[0] - a[0], q[1] - a[1]); if (L < 0.4) continue;
+    const d = [(q[0] - a[0]) / L, (q[1] - a[1]) / L], nn = [d[1], -d[0]];
+    wallQuad(GW, a, q, top, top, top + 0.75, top + 0.75, base, pin, col, eave + 0.75);
+    const ai = [a[0] - nn[0] * 0.3, a[1] - nn[1] * 0.3], qi = [q[0] - nn[0] * 0.3, q[1] - nn[1] * 0.3]; wallQuad(GW, qi, ai, top, top, top + 0.75, top + 0.75, base, pin, col, eave + 0.75);
+    for (let s = 0.55; s < L - 0.3; s += 1.15) { const c = [a[0] + d[0] * s - nn[0] * 0.15, a[1] + d[1] * s - nn[1] * 0.15]; boxWalls(GW, c[0], c[1], d, 0.29, 0.17, top + 0.75, top + 1.25, pin, col, base); }
+    const p = outer[(i + n - 1) % n], e1 = [a[0] - p[0], a[1] - p[1]], e2 = [q[0] - a[0], q[1] - a[1]];
+    if (e1[0] * e2[1] - e1[1] * e2[0] > 0 && Math.hypot(...e1) > 3.5 && L > 3.5) {
+      const oct = []; for (let k = 0; k < 8; k++) { const ang = k * Math.PI / 4 + Math.PI / 8; oct.push([a[0] + Math.cos(ang) * 0.55, a[1] + Math.sin(ang) * 0.55]); }
+      const ring = ringArea(oct) > 0 ? oct : oct.reverse(); const t1 = top + 2.0;
+      for (let k = 0; k < 8; k++) wallQuad(GW, ring[k], ring[(k + 1) % 8], base - 1, base - 1, t1, t1, base, pin, col, t1 - base);
+      for (let k = 0; k < 8; k++) roofTri(GR, [ring[k][0], t1, ring[k][1]], [ring[(k + 1) % 8][0], t1, ring[(k + 1) % 8][1]], [a[0], t1 + 0.9, a[1]], [4, seed, 0, 0], STONE);
+    }
+  }
+  const ob = obb(outer); if (!ob) return; const pts = [];
+  for (let u = -ob.hl + 2; u <= ob.hl - 2; u += 2) for (let v = -ob.hw + 2; v <= ob.hw - 2; v += 2) { const p = OB(ob, u, v); if (inPoly(p[0], p[1], outer, holes) && ringsDist(p[0], p[1], [outer, ...holes]) > 2.2) pts.push(p); }
+  const chosen = []; for (const p of pts.sort(() => rnd() - 0.5)) { if (chosen.length >= 7) break; if (chosen.every(c => Math.hypot(c[0] - p[0], c[1] - p[1]) > 7)) chosen.push(p); }
+  const y1 = base + Math.max(ridge, eave + 2) + 1.8;
+  for (const c of chosen) for (const k of [-0.6, 0, 0.6]) { const cx = c[0] + ob.U[0] * k, cz = c[1] + ob.U[1] * k; boxWalls(GW, cx, cz, ob.U, 0.22, 0.22, top - 0.5, y1, brick, BR, base); boxWalls(GW, cx, cz, ob.U, 0.29, 0.29, y1, y1 + 0.18, brick, BR, base); }
+}
+
+/* =========================================================================
+   Buildings modelled from the photographs and aerial views sent for this walk
+   ========================================================================= */
+const PHOTO_SITES = [
+  { hero: 'whitehall', re: /^whitehall/i, ll: [-0.2172, 51.3594], r: 18 },
+  { hero: 'lumley', re: /lumley/i, ll: [-0.2161, 51.3606], r: 14, maxA: 260 },
+  { hero: 'ph:white', ll: [-0.2187, 51.3587], r: 12 },
+  { hero: 'ph:conserv', ll: [-0.2153, 51.3609], r: 16 },
+];
+function markPhotoHeroes(W) {
+  for (const s of PHOTO_SITES) {
+    const p = ll2xz(...s.ll); let best = null, bd = s.r;
+    for (const b of W.buildings) {
+      if (b.hero || Math.abs(b.outer[0][0] - p[0]) > 120 || Math.abs(b.outer[0][1] - p[1]) > 120) continue;
+      const A = Math.abs(ringArea(b.outer)); if (A < 25 || (s.maxA && A > s.maxA)) continue;
+      if (s.re && s.re.test(b.tags.name || '')) { best = b; bd = -1; break; }
+      const d = inPoly(p[0], p[1], b.outer, b.holes) ? 0 : ringsDist(p[0], p[1], [b.outer]); if (d < bd) { bd = d; best = b; }
+    }
+    if (best) best.hero = s.hero;
+  }
+  for (const b of W.buildings) { if (b.hero) continue; const t = b.tags, hn = parseInt(t['addr:housenumber']); if (/station way/i.test(t['addr:street'] || '') && hn >= 71 && hn <= 85) b.hero = 'ph:stationway'; }
+}
+/* walls, chimneys and street-front gables for the photo-based buildings */
+const HERO_CHIM = {
+  whitehall: hl => ({ us: [-0.55 * hl, 0.3 * hl], extra: 1.1 }),
+  'ph:conserv': hl => ({ us: [-0.75 * hl, -0.38 * hl, 0, 0.38 * hl, 0.75 * hl], extra: 0.2, col: C(0.88, 0.87, 0.84) }),
+  'ph:white': hl => ({ us: [-0.4 * hl, 0.4 * hl], extra: 0.4, col: C(0.88, 0.87, 0.84) }),
+  'ph:stationway': hl => ({ us: [-0.45 * hl, 0.45 * hl], extra: 0.5 }),
+  station: hl => ({ us: [-0.35 * hl, 0.4 * hl], extra: 0.9 }),
+};
+const HERO_FRONT = {
+  'pub:harrow': { gables: [{ u: -0.55, w: 5.2 }, { u: -0.02, w: 5.2 }], porch: { u: -0.28, ue: -0.35 }, style: 11 },
+  whitehall: { gables: [{ u: -0.86, w: 3.0, small: true }, { u: -0.36, w: 3.8, proj: 1.7, bay: true }, { u: 0.38, w: 5.0 }] },
+};
+/* churchyard walls where the churchyard meets a car park (brick, about 2 m) */
+function churchyardWalls(W, churchPts) {
+  const yards = W.areas.filter(a => /^(cemetery|religious)$/.test(a.tags.landuse || '') || a.tags.amenity === 'grave_yard');
+  const parks = W.areas.filter(a => a.tags.amenity === 'parking');
+  const have = W.barriers.filter(b => /wall/.test(b.tags.barrier || ''));
+  let n = 0;
+  for (const y of yards) {
+    if (!churchPts.some(c => inRing(c[0], c[1], y.outer) || ringsDist(c[0], c[1], [y.outer]) < 40)) continue;
+    const r = y.outer;
+    for (let i = 0; i < r.length; i++) {
+      const a = r[i], q = r[(i + 1) % r.length], m = [(a[0] + q[0]) / 2, (a[1] + q[1]) / 2]; if (Math.hypot(q[0] - a[0], q[1] - a[1]) < 1) continue;
+      if (!parks.some(p => inRing(m[0], m[1], p.outer) || ringsDist(m[0], m[1], [p.outer]) < 4)) continue;
+      if (have.some(h => h.pts.some(p => Math.hypot(p[0] - m[0], p[1] - m[1]) < 4))) continue;
+      W.barriers.push({ pts: [a, q], tags: { barrier: 'wall', height: '2.1', _yard: 1 } }); n++;
+    }
+  }
+  return n;
+}
+function decalMesh(jobs) {
+  const cw = 1024, ch = 512, cv = document.createElement('canvas'); cv.width = cw; cv.height = ch * jobs.length; const g2 = cv.getContext('2d');
+  const P = [], N = [], U = [];
+  jobs.forEach((j, i) => {
+    const Hm = j.y1 - j.y0; if (j.draw) { g2.save(); g2.beginPath(); g2.rect(0, i * ch, cw, ch); g2.clip(); g2.clearRect(0, i * ch, cw, ch); j.draw(g2, 0, i * ch, cw, ch); g2.restore(); } else drawDecal(g2, 0, i * ch, cw, ch, j.w, Hm, j);
+    const R = [j.n[1], -j.n[0]], o = j.out, L = [j.ctr[0] - R[0] * j.w / 2 + j.n[0] * o, j.ctr[1] - R[1] * j.w / 2 + j.n[1] * o], Rt = [j.ctr[0] + R[0] * j.w / 2 + j.n[0] * o, j.ctr[1] + R[1] * j.w / 2 + j.n[1] * o];
+    const v0 = (i * ch + 4) / cv.height, v1 = ((i + 1) * ch - 4) / cv.height;
+    pushQuad(P, N, U, [L[0], j.y0, L[1]], [L[0], j.y1, L[1]], [Rt[0], j.y0, Rt[1]], [Rt[0], j.y1, Rt[1]], [j.n[0], 0, j.n[1]], [[0, v1], [0, v0], [1, v1], [1, v0]]);
+  });
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8;
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.35, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.receiveShadow = true; return m;
+}
+const drawGothicWindow = (g, x0, y0, cw, ch) => {
+  const w = cw * 0.8, h = ch * 0.92, cx = x0 + cw / 2, yb = y0 + ch * 0.97, ya = yb - h, r = w / 2;
+  const arch = (inset) => { g.beginPath(); g.moveTo(cx - r + inset, yb - inset); g.lineTo(cx - r + inset, ya + r * 0.9); g.quadraticCurveTo(cx - r + inset, ya + inset, cx, ya + inset); g.quadraticCurveTo(cx + r - inset, ya + inset, cx + r - inset, ya + r * 0.9); g.lineTo(cx + r - inset, yb - inset); g.closePath(); };
+  arch(0); g.fillStyle = '#b9b2a3'; g.fill(); arch(cw * 0.035); g.fillStyle = '#20262b'; g.fill();
+  g.strokeStyle = '#b9b2a3'; g.lineWidth = cw * 0.022;
+  for (const k of [-1, 0, 1]) { g.beginPath(); g.moveTo(cx + k * w * 0.2, yb); g.lineTo(cx + k * w * 0.2, ya + r * 0.95); g.stroke(); }
+  g.beginPath(); g.arc(cx, ya + r * 0.62, r * 0.36, 0, Math.PI * 2); g.stroke();
+  for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; g.beginPath(); g.moveTo(cx, ya + r * 0.62); g.lineTo(cx + Math.cos(a) * r * 0.36, ya + r * 0.62 + Math.sin(a) * r * 0.36); g.stroke(); }
+  g.beginPath(); g.moveTo(x0 + cw * 0.1, yb - h * 0.45); g.lineTo(x0 + cw * 0.9, yb - h * 0.45); g.stroke();
+  g.fillStyle = 'rgba(120,140,150,0.25)'; for (let k = 0; k < 40; k++) g.fillRect(cx - r * 0.9 + Math.random() * r * 1.8, yb - Math.random() * h * 0.6, cw * 0.012, ch * 0.02);
+};
+const drawTudorArch = (g, x0, y0, cw, ch) => {
+  const cx = x0 + cw / 2, w = cw * 0.78, yb = y0 + ch, ya = y0 + ch * 0.06, sh = ch * 0.62;
+  const shape = ins => { g.beginPath(); g.moveTo(cx - w / 2 + ins, yb); g.lineTo(cx - w / 2 + ins, ya + sh * 0.45); g.quadraticCurveTo(cx - w / 2 + ins, ya + ins + sh * 0.18, cx - w * 0.22, ya + ins + sh * 0.08); g.quadraticCurveTo(cx, ya + ins, cx + w * 0.22, ya + ins + sh * 0.08); g.quadraticCurveTo(cx + w / 2 - ins, ya + ins + sh * 0.18, cx + w / 2 - ins, ya + sh * 0.45); g.lineTo(cx + w / 2 - ins, yb); g.closePath(); };
+  shape(0); g.fillStyle = '#f2f1ec'; g.fill(); shape(cw * 0.07); g.fillStyle = '#16181a'; g.fill();
+  g.fillStyle = '#2a2b2c'; g.fillRect(cx - w * 0.18, yb - ch * 0.42, w * 0.36, ch * 0.42); g.fillStyle = '#3a3330'; g.fillRect(cx - w * 0.36, yb - ch * 0.02, w * 0.72, ch * 0.02);
+};
+function streetFace(ob, roadDist) {
+  const faces = [[ob.V, ob.hw, ob.hl, true], [[-ob.V[0], -ob.V[1]], ob.hw, ob.hl, true], [ob.U, ob.hl, ob.hw, false], [[-ob.U[0], -ob.U[1]], ob.hl, ob.hw, false]];
+  let fb = faces[0], fd = 1e9; for (const fc of faces) { const d = roadDist(ob.cx + fc[0][0] * (fc[1] + 4), ob.cz + fc[0][1] * (fc[1] + 4)); if (d < fd) { fd = d; fb = fc; } }
+  const nF = fb[0], Ax = [-nF[1], nF[0]];
+  return { nF, Ax, dep: fb[1], half: fb[2], side: fb[3], O2: (a, f) => [ob.cx + Ax[0] * a + nF[0] * f, ob.cz + Ax[1] * a + nF[1] * f] };
+}
+function buildPhotoExtras(blist, roadDist, terr, collide) {
+  const group = new THREE.Group(), jobs = [], parts = [], glass = [];
+  const plane = (ctr, n, w, y0, y1, job, out = 0.03) => jobs.push({ ctr, n, w, y0, y1, out, ...job });
+  /* Whitehall: Tudor-arched entrance in the porch bay, and the museum's board in the front garden */
+  const wh = blist.find(b => b.hero === 'whitehall');
+  if (wh && wh.ob) {
+    const F = streetFace(wh.ob, roadDist); wh.face = F; const bay = (HERO_FRONT.whitehall.gables.find(g => g.bay) || {}), bu = F.side ? bay.u * F.half : 0, bp = F.side ? bay.proj : 0;
+    plane(F.O2(bu, F.dep + bp), F.nF, 1.7, wh.base, wh.base + 2.45, { draw: drawTudorArch }, 0.04);
+    let sp = F.O2(F.half * 0.5, F.dep + 3.2); for (let k = 0; k < 4 && roadDist(sp[0], sp[1]) < 1.2; k++) sp = F.O2(F.half * 0.5, F.dep + 3.2 - (k + 1) * 0.6);
+    const y0 = terr(sp[0], sp[1]);
+    plane(sp, F.nF, 1.35, y0 + 0.9, y0 + 2.0, { bg: '#17191c', lines: [{ text: 'WHITEHALL', size: 0.62, color: '#f3f1ea' }, { text: 'HISTORIC', size: 0.62, color: '#f3f1ea' }, { text: 'HOUSE', size: 0.62, color: '#f3f1ea' }, { text: 'Free entry', size: 0.3, color: '#e7c64a', weight: 500 }] }, 0.04);
+    plane(sp, [-F.nF[0], -F.nF[1]], 1.35, y0 + 0.9, y0 + 2.0, { bg: '#17191c', lines: [{ text: 'WHITEHALL', size: 0.6, color: '#f3f1ea' }] }, 0.04);
+    for (const s of [-0.62, 0.62]) { const p = [sp[0] + F.Ax[0] * s, sp[1] + F.Ax[1] * s]; const g = new THREE.BoxGeometry(0.07, 2.05, 0.07); g.translate(p[0], y0 + 1.0, p[1]); parts.push(colored(g, 0x111214)); }
+    const bd = new THREE.BoxGeometry(1.33, 1.1, 0.05); bd.rotateY(Math.atan2(F.nF[0], F.nF[1])); bd.translate(sp[0], y0 + 1.45, sp[1]); parts.push(colored(bd, 0x17191c));
+    collide.add(sp[0], sp[1], sp[0], sp[1], { a: sp, b: sp, r: 0.7 });
+  }
+  /* Lumley Chapel: traceried windows in both gable ends */
+  const lu = blist.find(b => b.hero === 'lumley');
+  if (lu && lu.ob) { const ob = lu.ob; for (const e of [1, -1]) { const n = [e * ob.U[0], e * ob.U[1]], c = OB(ob, e * ob.hl, 0), w = Math.min(2 * ob.hw * 0.55, 3.4); plane(c, n, w, lu.base + 1.3, lu.base + Math.min(lu.eave + (lu.ridge - lu.eave) * 0.45, 1.3 + w * 1.9), { draw: drawGothicWindow }, 0.04); } }
+  /* 51.3609, -0.2153: glazed lean-to conservatory along the street front */
+  const cs = blist.find(b => b.hero === 'ph:conserv');
+  if (cs && cs.ob) {
+    const F = streetFace(cs.ob, roadDist); cs.face = F; const a0 = -F.half * 0.92, a1 = F.half * 0.8, d = 2.7, yb = cs.base, yt = cs.base + 3.1, yf = cs.base + 2.35, W3 = (a, f, y) => { const p = F.O2(a, f); return [p[0], y, p[1]]; };
+    const q = (A, B, Cc, D) => glass.push(...A, ...B, ...Cc, ...A, ...Cc, ...D);
+    q(W3(a0, F.dep, yt), W3(a1, F.dep, yt), W3(a1, F.dep + d, yf), W3(a0, F.dep + d, yf));
+    q(W3(a0, F.dep + d, yb + 0.55), W3(a1, F.dep + d, yb + 0.55), W3(a1, F.dep + d, yf), W3(a0, F.dep + d, yf));
+    for (const a of [a0, a1]) q(W3(a, F.dep, yb + 0.55), W3(a, F.dep + d, yb + 0.55), W3(a, F.dep + d, yf), W3(a, F.dep, yt));
+    const yaw = Math.atan2(F.nF[0], F.nF[1]);
+    const dw = new THREE.BoxGeometry(a1 - a0, 0.55, 0.25); dw.rotateY(yaw); const dc = F.O2((a0 + a1) / 2, F.dep + d); dw.translate(dc[0], yb + 0.27, dc[1]); parts.push(colored(dw, 0xe9e8e2));
+    for (let a = a0; a <= a1 + 0.01; a += (a1 - a0) / Math.max(1, Math.round((a1 - a0) / 1.2))) {
+      const p = F.O2(a, F.dep + d), g = new THREE.BoxGeometry(0.07, yf - yb - 0.55, 0.07); g.translate(p[0], (yf + yb + 0.55) / 2, p[1]); parts.push(colored(g, 0xf1f0ea));
+      const L = Math.hypot(d, yt - yf), r = new THREE.BoxGeometry(0.06, 0.07, L); r.rotateX(Math.atan2(yt - yf, d)); r.rotateY(yaw); const m = F.O2(a, F.dep + d / 2); r.translate(m[0], (yt + yf) / 2 + 0.04, m[1]); parts.push(colored(r, 0xf1f0ea));
+    }
+    const e0 = F.O2(a0, F.dep + d), e1 = F.O2(a1, F.dep + d), s0 = F.O2(a0, F.dep), s1 = F.O2(a1, F.dep);
+    for (const [A, Bq] of [[e0, e1], [s0, e0], [s1, e1]]) collide.add(A[0], A[1], Bq[0], Bq[1], { a: A, b: Bq, r: 0.1 });
+  }
+  if (glass.length) { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(glass, 3)); g.computeVertexNormals(); const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xa9bcc6, metalness: 0.7, roughness: 0.06, transparent: true, opacity: 0.38, side: THREE.DoubleSide, depthWrite: false })); m.renderOrder = 2; group.add(m); }
+  if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 })); m.castShadow = m.receiveShadow = true; group.add(m); }
+  if (jobs.length) group.add(decalMesh(jobs));
+  return group;
+}
+
+/* =========================================================================
+   Pubs built from photographs: Ye Olde Red Lion, The Harrow, the Prince of Wales
+   ========================================================================= */
+function heroPubs(pois) {
+  for (const p of pois) { if (p.kind !== 'pub' || !p.host || p.host.hero) continue; const h = /red lion/i.test(p.name) ? 'pub:redlion' : /harrow/i.test(p.name) ? 'pub:harrow' : /prince of wales/i.test(p.name) ? 'pub:pow' : null; if (h) p.host.hero = h; }
+}
+function drawDecal(g, x0, y0, cw, ch, Wm, Hm, job) {
+  g.save(); g.beginPath(); g.rect(x0, y0, cw, ch); g.clip(); g.clearRect(x0, y0, cw, ch);
+  if (job.bg) { g.fillStyle = job.bg; g.fillRect(x0, y0, cw, ch); if (job.border) { g.strokeStyle = job.border; g.lineWidth = ch * 0.03; g.strokeRect(x0 + ch * 0.04, y0 + ch * 0.04, cw - ch * 0.08, ch - ch * 0.08); } }
+  const sx = (Hm / ch) / (Wm / cw), tot = job.lines.reduce((s, l) => s + l.size * 1.12, 0), k = ch * 0.9 / tot; let y = y0 + ch * 0.05;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (const l of job.lines) {
+    const fs = l.size * k; g.font = `${l.weight || 700} ${fs}px ${l.font || 'Georgia, "Times New Roman", serif'}`;
+    const text = l.spacing ? l.text.split('').join(String.fromCharCode(8202)) : l.text, avail = (cw * 0.92) / sx, tw = g.measureText(text).width, s2 = tw > avail ? sx * avail / tw : sx;
+    g.save(); g.translate(x0 + cw / 2, y + fs * 0.56); g.scale(s2, 1); g.fillStyle = l.color || '#151515'; g.fillText(text, 0, 0); g.restore(); y += fs * 1.12;
+  }
+  g.restore();
+}
+function buildPubExtras(blist, pois, roadDist, terr, collide, fixMat) {
+  const group = new THREE.Group(), jobs = [], parts = [];
+  const byHero = h => blist.find(b => b.hero === h);
+  const plane = (ctr, n, w, y0, y1, job, out = 0.03) => jobs.push({ ctr, n, w, y0, y1, out, ...job });
+  /* Ye Olde Red Lion: lettering on the gable end, blackboard, picnic tables on the terrace */
+  const rl = byHero('pub:redlion');
+  if (rl && rl.ob) {
+    const ob = rl.ob, e = roadDist(...OB(ob, ob.hl + 4, 0)) <= roadDist(...OB(ob, -ob.hl - 4, 0)) ? 1 : -1, n = [e * ob.U[0], e * ob.U[1]], R = [n[1], -n[0]];
+    const c = OB(ob, e * ob.hl, 0), w = Math.min(2 * ob.hw * 0.86, 7.5), yTop = rl.rk === 'gable' ? rl.base + rl.eave + (rl.ridge - rl.eave) * 0.72 : rl.base + rl.eave + 0.2, yBot = rl.base + Math.max(2.1, rl.eave - 1.2);
+    plane(c, n, w, yBot, yTop, { lines: [{ text: 'YE OLDE', size: 0.8, spacing: true }, { text: 'RED', size: 1.15, spacing: true }, { text: 'LION', size: 1.15, spacing: true }, { text: 'Traditional Free House', size: 0.42, weight: 500 }] });
+    const bb = [c[0] - R[0] * w * 0.27, c[1] - R[1] * w * 0.27];
+    plane(bb, n, 0.85, rl.base + 0.95, rl.base + 2.15, { bg: '#1c1f26', border: '#c9c2a8', lines: [{ text: 'Traditional', size: 0.5, color: '#e9e2c8', weight: 500 }, { text: 'CASK', size: 0.75, color: '#e9e2c8' }, { text: 'ALES', size: 0.75, color: '#e9e2c8' }, { text: 'GREAT', size: 0.6, color: '#e9e2c8' }, { text: 'FOOD', size: 0.6, color: '#e9e2c8' }, { text: 'BEER', size: 0.6, color: '#e9e2c8' }, { text: 'GARDEN', size: 0.6, color: '#e9e2c8' }] }, 0.05);
+    const T = 0x262a33, tparts = [box(1.8, 0.05, 0.75, 0, 0.74, 0, T), box(1.8, 0.04, 0.26, 0, 0.44, 0.62, T), box(1.8, 0.04, 0.26, 0, 0.44, -0.62, T)];
+    for (const sx of [-0.7, 0.7]) { const l1 = new THREE.BoxGeometry(0.06, 0.95, 0.06); l1.rotateX(0.75); l1.translate(sx, 0.38, 0.28); const l2 = new THREE.BoxGeometry(0.06, 0.95, 0.06); l2.rotateX(-0.75); l2.translate(sx, 0.38, -0.28); tparts.push(colored(l1, T), colored(l2, T)); }
+    const table = mergeGeometries(tparts);
+    for (const [du, dv] of [[3.2, -1.4], [3.4, 1.6], [5.6, 0.1]]) { const p = OB(ob, e * (ob.hl + du), dv); if (roadDist(p[0], p[1]) < 1.5) continue; const g = table.clone(); g.rotateY(Math.atan2(-ob.U[1], ob.U[0]) + Math.PI / 2); g.translate(p[0], terr(p[0], p[1]), p[1]); parts.push(g); collide.add(p[0], p[1], p[0], p[1], { a: p, b: p, r: 0.85 }); }
+  }
+  /* The Prince of Wales: lettering under the eaves and a canopy over the pub front */
+  const pw = pois.find(p => p.host && p.host.hero === 'pub:pow');
+  if (pw && pw.cx != null) {
+    const b = blist.find(x => x.id === pw.host.id), r = pw.host.outer, a = r[pw.edge], d = [(r[(pw.edge + 1) % r.length][0] - a[0]) / pw.L, (r[(pw.edge + 1) % r.length][1] - a[1]) / pw.L], n = pw.n;
+    const c = [a[0] + d[0] * pw.c, a[1] + d[1] * pw.c], w = Math.min(pw.L * 0.85, 8.5);
+    plane(c, n, w, b.base + b.eave - 0.85, b.base + b.eave - 0.12, { lines: [{ text: 'PRINCE OF WALES', size: 1, spacing: true }] });
+    const cw2 = Math.min(pw.L * 0.82, 9), y1 = b.base + 2.95, y0 = b.base + 2.5, Pt = (s, y, o) => [c[0] + d[0] * s + n[0] * o, y, c[1] + d[1] * s + n[1] * o];
+    const AP = [], AN = [], AC = [], col = [0.2, 0.08, 0.06], sl = [n[0] * 0.33, 1, n[1] * 0.33], ll = Math.hypot(...sl), nn = sl.map(v => v / ll);
+    pushQuad(AP, AN, AC, Pt(-cw2 / 2, y0, 1.25), Pt(-cw2 / 2, y1, 0.05), Pt(cw2 / 2, y0, 1.25), Pt(cw2 / 2, y1, 0.05), nn, [col, col, col, col]);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(AP, 3)); g.setAttribute('normal', new THREE.Float32BufferAttribute(AN, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(AC, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(AP.length / 3 * 2).fill(0), 2)); parts.push(g);
+  }
+  if (parts.length) { const m = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, side: THREE.DoubleSide })); m.castShadow = m.receiveShadow = true; group.add(m); }
+  if (!jobs.length) return group;
+  const cw = 1024, ch = 512, cv = document.createElement('canvas'); cv.width = cw; cv.height = ch * jobs.length; const g2 = cv.getContext('2d');
+  const P = [], N = [], U = [];
+  jobs.forEach((j, i) => {
+    const Hm = j.y1 - j.y0; drawDecal(g2, 0, i * ch, cw, ch, j.w, Hm, j);
+    const R = [j.n[1], -j.n[0]], o = j.out, L = [j.ctr[0] - R[0] * j.w / 2 + j.n[0] * o, j.ctr[1] - R[1] * j.w / 2 + j.n[1] * o], Rt = [j.ctr[0] + R[0] * j.w / 2 + j.n[0] * o, j.ctr[1] + R[1] * j.w / 2 + j.n[1] * o];
+    const v0 = (i * ch + 4) / cv.height, v1 = ((i + 1) * ch - 4) / cv.height;
+    pushQuad(P, N, U, [L[0], j.y0, L[1]], [L[0], j.y1, L[1]], [Rt[0], j.y0, Rt[1]], [Rt[0], j.y1, Rt[1]], [j.n[0], 0, j.n[1]], [[0, v1], [0, v0], [1, v1], [1, v0]]);
+  });
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; t.anisotropy = 8;
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.35, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); m.receiveShadow = true; group.add(m);
   return group;
 }
 
@@ -2010,8 +2360,11 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     const shopNodes = W.points.filter(p => p.tags.shop || /restaurant|cafe|pub|bank|pharmacy|fast_food|bar|estate_agent|post_office/.test(p.tags.amenity || ''));
     /* landmarks that should be weatherboarded */
     const weatherIds = new Set(); for (const b of W.buildings) { const t = b.tags; const hn = parseInt(t['addr:housenumber']); if (/broadway/i.test(t['addr:street'] || '') && hn >= 43 && hn <= 57 && hn % 2) weatherIds.add(b.id); }
-    const pois = assignSigns(W, collectPOIs(W), roadDist);
+    const pois = assignSigns(W, collectPOIs(W), roadDist); heroPubs(pois);
     const nOS = matchOS(W, extra.os); matchNHLE(W, extra.nhle || []);
+    const manPos = findMansion(W, extra.nhle || []); markMansion(W, manPos); markStation(W, stationPoint(W)); markPhotoHeroes(W);
+    const parC = manPos ? [manPos[0] + 14, manPos[1] + 66] : null, parBeds = [];
+    if (parC) for (let k = 0; k < 8; k++) { const a0 = k * Math.PI / 4 + 0.06, a1 = (k + 1) * Math.PI / 4 - 0.06, P = (r, a) => [parC[0] + Math.cos(a) * r, parC[1] + Math.sin(a) * r]; const bed = [P(2.6, a0), P(8, a0), P(8, a1), P(2.6, a1)]; parBeds.push(bed); W.barriers.push({ pts: [...bed, bed[0]], tags: { barrier: 'hedge', height: '0.5', width: '0.35' } }); }
     const memPos = findMemorial(W, extra.nhle || []); const lib = findLibrary(W, memPos); if (lib) lib.hero = 'library1962';
     let memRot = 0; { let bs = 1e9, best = 0; for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2, d = roadDist(memPos[0] + Math.sin(a) * 12, memPos[1] + Math.cos(a) * 12); if (d < bs) { bs = d; best = a; } } memRot = Math.round(best / (Math.PI / 2)) * (Math.PI / 2); }
     const memF = [Math.sin(memRot), Math.cos(memRot)], memR = [Math.cos(memRot), -Math.sin(memRot)];
@@ -2030,6 +2383,7 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     /* --- ground --- */
     step('veg', 'on');
     const M = drawMasks(W, B.list, Q.mask, g => {
+      if (parC) { g.beginPath(); g.arc(parC[0], parC[1], 9.5, 0, Math.PI * 2); g.fillStyle = '#0000ff'; g.fill(); for (const bed of parBeds) { g.beginPath(); for (const p of bed) g.lineTo(p[0], p[1]); g.closePath(); g.fillStyle = '#000000'; g.fill(); } }
       const h = memHS; g.beginPath(); for (const [f, r] of [[-h, -h], [-h, h], [h, h], [h, -h]]) { const p = memP(f, r); g.lineTo(p[0], p[1]); } g.closePath(); g.fillStyle = '#0000ff'; g.fill();
       g.beginPath(); for (let k = 0; k < 8; k++) { const a = memRot + Math.PI / 8 + k * Math.PI / 4; g.lineTo(memPos[0] + Math.sin(a) * 6.2, memPos[1] + Math.cos(a) * 6.2); } g.closePath(); g.fillStyle = '#ff0000'; g.fill();
       const e = memP(h + 3, 0), s0 = memP(5, 0); g.beginPath(); g.moveTo(s0[0], s0[1]); g.lineTo(e[0], e[1]); g.lineWidth = 2.0; g.strokeStyle = '#ff0000'; g.stroke(); });
@@ -2068,13 +2422,14 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     for (const m of [walls, roofs]) { m.castShadow = m.receiveShadow = true; scene.add(m); }
     /* barriers: walls, fences, hedges */
     const GBr = new GB(); const collide = new Hash(8);
+    churchyardWalls(W, B.list.filter(b => b.kind === 'church').map(b => b.c));
     for (const bar of W.barriers) {
       const t = bar.tags.barrier; let st, col, h, th;
       if (/^(wall|retaining_wall|city_wall)$/.test(t)) { st = 0; col = C(0.5, 0.26, 0.17); h = parseFloat(bar.tags.height) || 1.7; th = 0.3; }
       else if (t === 'fence') { st = 7; col = C(0.36, 0.27, 0.18); h = parseFloat(bar.tags.height) || 1.6; th = 0.05; }
-      else if (t === 'hedge') { st = 8; col = C(0.14, 0.22, 0.07); h = parseFloat(bar.tags.height) || 1.7; th = 0.9; }
+      else if (t === 'hedge') { st = 8; col = C(0.14, 0.22, 0.07); h = parseFloat(bar.tags.height) || 1.7; th = parseFloat(bar.tags.width) || 0.9; }
       else continue;
-      h = clamp(h, 0.6, 3.5);
+      h = clamp(h, 0.35, 3.5);
       const pts = []; for (let i = 0; i < bar.pts.length; i++) { const a = bar.pts[i]; if (i) { const p = bar.pts[i - 1], L = Math.hypot(a[0] - p[0], a[1] - p[1]), n = Math.ceil(L / 3); for (let k = 1; k < n; k++) pts.push([p[0] + (a[0] - p[0]) * k / n, p[1] + (a[1] - p[1]) * k / n]); } pts.push(a); }
       for (let i = 1; i < pts.length; i++) {
         const a = pts[i - 1], b = pts[i], dx = b[0] - a[0], dz = b[1] - a[1], L = Math.hypot(dx, dz); if (L < 0.05) continue; const nx = dz / L * th / 2, nz = -dx / L * th / 2;
@@ -2089,7 +2444,7 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
       }
     }
     if (GBr.p.length) { const bm = new THREE.Mesh(GBr.build(), wallMat); bm.castShadow = bm.receiveShadow = true; scene.add(bm); }
-    const stP = W.points.find(p => p.tags.railway === 'station' || (p.tags.public_transport === 'station' && p.tags.train !== 'no')); const station = stP ? [stP.x, stP.z] : ll2xz(-0.2147, 51.356);
+    const station = stationPoint(W);
     const fixMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.1 });
     scene.add(buildRailway(W, terr, collide, station, wallMat, roofMat, fixMat));
     scene.add(buildCanopies(W, terr, dtm, dsm, collide, wallMat, roofMat, fixMat));
@@ -2099,6 +2454,8 @@ function assembleWorld(W, dtm, dsm, reg, extra = {}) {
     for (const t of trees) if (t.src !== 'band') collide.add(t.x, t.z, t.x, t.z, { a: [t.x, t.z], b: [t.x, t.z], r: clamp(t.r * 0.07, 0.2, 0.5) });
     const insideBuilding = (x, z) => { for (const b of bldH.query(x, z, 0)) if (inPoly(x, z, b.outer, b.holes)) return true; return false; };
     scene.add(buildMemorial(memPos, memRot, terr, collide));
+    scene.add(buildPubExtras(B.list, pois, roadDist, terr, collide, null));
+    scene.add(buildPhotoExtras(B.list, roadDist, terr, collide));
     const graves = placeGraves(W, B.list, trees, collide, maskS, insideBuilding, extra.nhle || []);
     scene.add(buildGraves(graves, terr, collide));
     await tick();
@@ -2177,6 +2534,8 @@ const LM_DEF = [
   { id: 'cottages', name: 'Broadway Cottages', era: '17th century', auto: 'cottages', text: 'A row of 17th-century weatherboarded cottages at 43–57 Broadway, altered long ago into shops. They show what the village street looked like before interwar rebuilding.' },
   { id: 'cpark', name: 'Cheam Park', era: 'Parkland', re: /^cheam park$/i, area: true, text: 'Open parkland beside the village. Parts of it fall inside the Cheam Village conservation area.' },
   { id: 'station', name: 'Cheam station', era: 'Railway station', re: /cheam/i, pt: t => t.railway === 'station' || t.public_transport === 'station' || t.building === 'train_station', ll: [-0.2147, 51.356], text: 'The station sits between the village and South Cheam, about 200 metres south of the High Street. It became part of the London, Brighton and South Coast Railway on 10 May 1847, and trains run to London Victoria, Dorking and Horsham.' },
+  { id: 'redlion', name: 'Ye Olde Red Lion', era: '16th or 17th century · Grade II', re: /red lion/i, ll: [-0.216334, 51.359549], text: 'A timber-framed inn of the 16th or 17th century, much altered and enlarged, in tile and weatherboard. It has stood here for at least 400 years and is said to hide a priest\'s hole in the fireplace. The paved terrace at the front has an old well.' },
+  { id: 'mansion', name: 'Nonsuch Mansion', era: 'Built 1731–43 · rebuilt 1802–06 · Grade II*', auto: 'mansion', text: 'Built for Joseph Thompson between 1731 and 1743 in the park of Henry VIII\'s lost Nonsuch Palace. Samuel Farmer bought it in 1799 and had Jeffry Wyatville rebuild it in a Tudor Gothic style between 1802 and 1806, with battlements, turrets and clustered chimneys. Look for the Farmer family crest and motto, Hora e sempre. The park is run jointly by Epsom and Ewell and Sutton councils.' },
   { id: 'nonsuch', name: 'Nonsuch Park', era: 'Site of Henry VIII\'s palace', re: /nonsuch park/i, area: true, text: 'Henry VIII\'s Nonsuch Palace stood in this park; it was demolished in the 1680s. The park also holds the listed Nonsuch Mansion, and its entrance is only a couple of hundred yards from the crossroads.' },
 ];
 function resolveLandmarks(W, blist, cross, nhle = []) {
@@ -2185,6 +2544,7 @@ function resolveLandmarks(W, blist, cross, nhle = []) {
     let pos = null;
     if (L.auto === 'cross') pos = cross;
     else if (L.auto === 'memorial') pos = findMemorial(W, nhle);
+    else if (L.auto === 'mansion') pos = findMansion(W, nhle);
     else if (L.auto === 'cottages') { const bs = W.buildings.filter(b => { const t = b.tags, hn = parseInt(t['addr:housenumber']); return /broadway/i.test(t['addr:street'] || '') && hn >= 43 && hn <= 57; }); if (bs.length) { const cs = bs.map(b => centroid(b.outer)); pos = [cs.reduce((s, c) => s + c[0], 0) / cs.length, cs.reduce((s, c) => s + c[1], 0) / cs.length]; } }
     else {
       const cands = [];
